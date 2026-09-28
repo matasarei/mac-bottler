@@ -131,6 +131,22 @@ if [ $rc -eq 2 ]; then ok; else bad "exe without icons: icon exits 2, got $rc"; 
 "$T/bottler" exe-icon "$I/noicon.exe" "$I/out" "$I/refused2.exe" 2>/dev/null; rc=$?
 if [ $rc -eq 3 ] && [ ! -e "$I/refused2.exe" ]; then ok; else bad "exe without icons: exe-icon refused, got $rc"; fi
 
+# a figure on a transparent background goes on a plate instead of being cropped
+pe "$I/figure.exe" --imports KERNEL32.dll --icons 16,32 --figure
+if "$T/bottler" icon "$I/figure.exe" "$I/fig"; then ok; else bad "icon on a figure exits 0"; fi
+rgb() { python3 -c "import sys; from PIL import Image; print(*Image.open(sys.argv[1]).convert('RGBA').getpixel((int(sys.argv[2]), int(sys.argv[3]))))" "$@"; }
+# the 24-bit icon's mask must be applied (ImageIO does not), or there is no figure to plate
+if [ "$(rgb "$I/fig/icon_1024.png" 160 512)" = "170 165 154 255" ]; then ok; else bad "figure: the plate fills the body, got $(rgb "$I/fig/icon_1024.png" 160 512)"; fi
+if [ "$(px "$I/fig/icon_1024.png" 0 0)" = "1024 0" ]; then ok; else bad "figure: the corner stays transparent"; fi
+if [ "$(px "$I/out/icon_1024.png" 150 512)" = "1024 255" ] && [ "$(px "$I/out/icon_1024.png" 60 512)" = "1024 0" ]; then ok; else bad "a picture still fills the body, no plate"; fi
+mode() { python3 -c "import sys; from PIL import Image; print(Image.open(sys.argv[1]).mode)" "$1"; }
+if [ "$(mode "$I/fig/exe-icon-256.png")" = "P" ]; then ok; else bad "few-colour exe icon is a palette PNG"; fi
+# two icon slots with ~4 KB of room: the largest icon still goes in, the rest is left out
+if "$T/bottler" exe-icon "$I/figure.exe" "$I/fig" "$I/figure-patched.exe" 2>/dev/null; then ok; else bad "exe-icon fits a 2-slot exe"; fi
+if "$T/bottler" icon "$I/figure-patched.exe" "$I/fig2" 2>/dev/null && [ "$(px "$I/fig2/exe-icon-256.png" 128 128)" = "256 255" ] \
+   && [ "$(python3 -c "import sys; from PIL import Image; print(Image.open(sys.argv[1]).convert('RGBA').getpixel((128,128)) == Image.open(sys.argv[2]).convert('RGBA').getpixel((128,128)))" "$I/fig/exe-icon-256.png" "$I/fig2/exe-icon-256.png")" = True ]
+then ok; else bad "2-slot exe carries the new 256 px icon"; fi
+
 # --- geometry: fake displays (Cocoa rects: origin bottom-left of the primary, y up)
 geo() { "$T/bottler" geometry --screen "$1" --visible "$2" --safe-top "$3" --primary "$4" "${@:5}"; }
 expect() {  # expect <description> <expected> <actual>
@@ -241,6 +257,13 @@ AFTER=$(tree_md5 "$G")
 OUT=$("$T/bottler" install "$R/recipe" "$SRC" "$G" "$ICONS")
 expect "second install changes nothing" "already installed: nothing to change" "$(echo "$OUT" | tail -1)"
 expect "second install keeps every file (saves too)" "$AFTER" "$(tree_md5 "$G")"
+# a rebuild makes a fresh icon folder over the kept game: the icon comes from the
+# stock exe (.bkp), not from the one that already carries it
+"$T/bottler" install "$R/recipe" "$SRC" "$G" "$R/icons-rebuild" >/dev/null
+expect "rebuild makes the same app icon" "$(md5 -q "$ICONS/icon_1024.png")" "$(md5 -q "$R/icons-rebuild/icon_1024.png" 2>/dev/null)"
+sed -i '' 's/"exeIcon": "Game.exe"/"exeIcon": "ddraw.dll.gog"/' "$R/recipe/recipe.json"
+OUT=$("$T/bottler" install "$R/recipe" "$SRC" "$R/game-noicon" "$R/icons-noicon" 2>&1)
+if echo "$OUT" | grep -q "keeps its own icon" && [ ! -e "$R/game-noicon/ddraw.dll.gog.bkp" ]; then ok; else bad "a refused exe icon leaves no .bkp (so a later install retries)"; fi
 
 write_recipe refuse
 "$T/bottler" install "$R/recipe" "$SRC" "$R/game-refused" "$R/icons2" >/dev/null 2>&1; rc=$?

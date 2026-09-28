@@ -84,6 +84,23 @@ found on; the lesson is written so it applies to other games too.
   with PNG icons (256/48/32/16), re-point the RT_ICON entries and rewrite the group
   icon in its own slot, and refuse unless every changed byte stays inside `.rsrc`
   and the file size is unchanged.
+- **Some exes have very little room for icons.** Nox's `Game.exe` has two slots
+  and 2960 bytes. The exe icons are therefore written as indexed PNGs whenever they
+  have 256 colours or fewer (lossless; a plated 256 px pixel-art icon is ~2.6 KB),
+  and `exe-icon` keeps as many sizes as fit, the largest first (the Dock shows it),
+  then 32, 48 and 16 px. A refused patch removes its `.bkp`, so a later install
+  tries again.
+- **ImageIO ignores the AND mask of 24-bit BMP icons** (it applies it to 4- and
+  8-bit ones): the transparent parts decode opaque. `largestIcon` clears the masked
+  pixels itself.
+- **A figure on a transparent background goes on a plate.** When at least 30% of
+  the icon is transparent (Nox's mask: 44%, SMAC's `terranx.exe`: 56%), filling the
+  squircle would cut the figure and leave holes, so it is drawn whole on a flat
+  stone-coloured plate at a whole-pixel scale. Pictures (SMAC's `terran.exe`: 0%; a
+  round icon is ~21%) still fill the body.
+- **The app icon is made from the stock exe** (`<exe>.bkp`) when `appIcon` and
+  `exeIcon` name the same exe: a rebuild keeps the installed game, whose exe
+  already carries the made icon.
 - **The Dock name** is the loader's file name as exec'd. On the CrossOver 23 engine
   we renamed the loader and patched the one path string in `ntdll.so`; on the
   WoWSilicon Wine 11 runtime that string cannot be patched, and wow-launcher's
