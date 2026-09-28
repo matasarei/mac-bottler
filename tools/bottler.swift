@@ -35,6 +35,7 @@
 //
 // Subcommands are added as recipes need them (docs/RECIPES.md).
 import Foundation
+import zlib
 import CryptoKit
 import AppKit
 import CoreGraphics
@@ -432,7 +433,32 @@ func largestIcon(_ pe: PEFile) throws -> CGImage {
     ico.append(blob)
     guard let src = CGImageSourceCreateWithData(ico as CFData, nil),
           let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { throw PEError(message: "icon does not decode") }
-    return img
+    return blob.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? img : applyingANDMask(img, bmp: blob)
+}
+
+/// ImageIO ignores the AND mask of 24-bit BMP icons (it applies it to 4- and 8-bit
+/// ones), so the transparent parts come out opaque. Clear the masked pixels here;
+/// for icons ImageIO already masked, this changes nothing.
+func applyingANDMask(_ img: CGImage, bmp: Data) -> CGImage {
+    guard bmp.count >= 40 else { return img }
+    let w = Int(bmp.u32(4)), h = Int(Int32(bitPattern: bmp.u32(8))) / 2, bpp = Int(bmp.u16(14))
+    guard bpp < 32, w == img.width, h == img.height else { return img }
+    let used = Int(bmp.u32(32))
+    let palette = bpp <= 8 ? 4 * (used != 0 ? used : 1 << bpp) : 0
+    let xorRow = ((w * bpp + 31) / 32) * 4, maskRow = ((w + 31) / 32) * 4
+    let maskStart = Int(bmp.u32(0)) + palette + xorRow * h
+    guard maskStart + maskRow * h <= bmp.count else { return img }
+    let ctx = rgbaContext(w, h)
+    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let data = ctx.data else { return img }
+    let px = data.bindMemory(to: UInt8.self, capacity: ctx.bytesPerRow * h)
+    for row in 0..<h {   // memory row 0 is the top; BMP rows run bottom-up
+        let m = maskStart + (h - 1 - row) * maskRow
+        for x in 0..<w where bmp[m + x / 8] & (0x80 >> (x % 8)) != 0 {
+            for c in 0..<4 { px[row * ctx.bytesPerRow + x * 4 + c] = 0 }
+        }
+    }
+    return ctx.makeImage() ?? img
 }
 
 func rgbaContext(_ w: Int, _ h: Int) -> CGContext {
@@ -461,15 +487,37 @@ func squircle(in r: CGRect) -> CGPath {
 func roundedIcon(_ src: CGImage, canvas: Int) -> CGImage {
     let body = Int((Double(canvas) * 824 / 1024).rounded())
     let offset = (canvas - body) / 2
-    let k = max(1, Int((Double(body) / Double(src.width)).rounded(.up)))
-    let big = src.width * k
     let ctx = rgbaContext(canvas, canvas)
     let bodyRect = CGRect(x: offset, y: offset, width: body, height: body)
     ctx.addPath(squircle(in: bodyRect)); ctx.clip()
     ctx.interpolationQuality = .none
-    let crop = (big - body) / 2
-    ctx.draw(src, in: CGRect(x: offset - crop, y: offset - crop, width: big, height: big))
+    if transparentShare(src) >= 0.3 {
+        // a figure on nothing (a mask, a logo): cropping would cut it and leave
+        // holes, so it sits whole on a plate, at a whole-pixel scale
+        ctx.setFillColor(CGColor(srgbRed: 170 / 255, green: 165 / 255, blue: 154 / 255, alpha: 1))
+        ctx.fill(bodyRect)
+        let size = src.width * max(1, Int(Double(body) * 0.78 / Double(src.width)))
+        let o = (canvas - size) / 2
+        ctx.draw(src, in: CGRect(x: o, y: o, width: size, height: size))
+    } else {
+        // a picture: it fills the body, cropped by a few pixels at most
+        let big = src.width * max(1, Int((Double(body) / Double(src.width)).rounded(.up)))
+        let crop = (big - body) / 2
+        ctx.draw(src, in: CGRect(x: offset - crop, y: offset - crop, width: big, height: big))
+    }
     return ctx.makeImage()!
+}
+
+/// The share of an image's pixels that are mostly transparent (alpha < 128).
+func transparentShare(_ img: CGImage) -> Double {
+    let w = img.width, h = img.height
+    let ctx = rgbaContext(w, h)
+    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let data = ctx.data, w * h > 0 else { return 0 }
+    let px = data.bindMemory(to: UInt8.self, capacity: ctx.bytesPerRow * h)
+    var clear = 0
+    for row in 0..<h { for x in 0..<w where px[row * ctx.bytesPerRow + x * 4 + 3] < 128 { clear += 1 } }
+    return Double(clear) / Double(w * h)
 }
 
 func downscaled(_ img: CGImage, _ size: Int) -> CGImage {
@@ -477,6 +525,48 @@ func downscaled(_ img: CGImage, _ size: Int) -> CGImage {
     ctx.interpolationQuality = .high
     ctx.draw(img, in: CGRect(x: 0, y: 0, width: size, height: size))
     return ctx.makeImage()!
+}
+
+/// A PNG as small as it can be without losing anything: indexed (with a tRNS
+/// alpha table) when the image has at most 256 distinct colours, which pixel art
+/// on a flat plate does; a normal PNG otherwise. Old exes have little room for icons.
+func writeSmallPNG(_ img: CGImage, _ url: URL) throws {
+    let w = img.width, h = img.height
+    let ctx = rgbaContext(w, h)
+    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let data = ctx.data else { return try writePNG(img, url) }
+    let px = data.bindMemory(to: UInt8.self, capacity: ctx.bytesPerRow * h)
+    var palette: [UInt32] = [], index: [UInt32: UInt8] = [:]
+    var raw = [UInt8](); raw.reserveCapacity((w + 1) * h)
+    for row in 0..<h {
+        raw.append(0)   // filter: none
+        for x in 0..<w {
+            let o = row * ctx.bytesPerRow + x * 4
+            var (r, g, b, a) = (UInt32(px[o]), UInt32(px[o + 1]), UInt32(px[o + 2]), UInt32(px[o + 3]))
+            if a == 0 { (r, g, b) = (0, 0, 0) } else if a < 255 {   // un-premultiply
+                (r, g, b) = (min(255, r * 255 / a), min(255, g * 255 / a), min(255, b * 255 / a))
+            }
+            let key = r << 24 | g << 16 | b << 8 | a
+            if let i = index[key] { raw.append(i); continue }
+            guard palette.count < 256 else { return try writePNG(img, url) }
+            index[key] = UInt8(palette.count); raw.append(UInt8(palette.count)); palette.append(key)
+        }
+    }
+    func chunk(_ type: String, _ body: [UInt8]) -> [UInt8] {
+        var c = Array(type.utf8) + body
+        let crc = UInt32(crc32(0, &c, uInt(c.count)))
+        return be32(UInt32(body.count)) + c + be32(crc)
+    }
+    func be32(_ v: UInt32) -> [UInt8] { [UInt8(v >> 24), UInt8(v >> 16 & 255), UInt8(v >> 8 & 255), UInt8(v & 255)] }
+    var zlen = compressBound(uLong(raw.count)); var z = [UInt8](repeating: 0, count: Int(zlen))
+    guard compress2(&z, &zlen, raw, uLong(raw.count), 9) == Z_OK else { return try writePNG(img, url) }
+    var png: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    png += chunk("IHDR", be32(UInt32(w)) + be32(UInt32(h)) + [8, 3, 0, 0, 0])
+    png += chunk("PLTE", palette.flatMap { [UInt8($0 >> 24), UInt8($0 >> 16 & 255), UInt8($0 >> 8 & 255)] })
+    png += chunk("tRNS", palette.map { UInt8($0 & 255) })
+    png += chunk("IDAT", Array(z[0..<Int(zlen)]))
+    png += chunk("IEND", [])
+    try Data(png).write(to: url)
 }
 
 func writePNG(_ img: CGImage, _ url: URL) throws {
@@ -509,9 +599,9 @@ func makeIcons(exe: URL, out: URL) throws {
     guard iconutil.terminationStatus == 0 else { throw PEError(message: "iconutil failed") }
     try FileManager.default.removeItem(at: iconset)
     // the exe's own icons: 256 drawn directly (sharp pixels), the small ones from the master
-    try writePNG(roundedIcon(src, canvas: 256), out.appendingPathComponent("exe-icon-256.png"))
+    try writeSmallPNG(roundedIcon(src, canvas: 256), out.appendingPathComponent("exe-icon-256.png"))
     for size in [48, 32, 16] {
-        try writePNG(downscaled(master, size), out.appendingPathComponent("exe-icon-\(size).png"))
+        try writeSmallPNG(downscaled(master, size), out.appendingPathComponent("exe-icon-\(size).png"))
     }
 }
 
@@ -530,22 +620,32 @@ func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     }
     let all = pe.resources()
     let icons = all.filter { $0.type == rtIcon }.sorted { $0.id < $1.id }
-    let pngs: [(size: Int, data: Data)] = try [256, 48, 32, 16].compactMap { size in
+    let available: [(size: Int, data: Data)] = try [256, 48, 32, 16].compactMap { size in
         let url = pngDir.appendingPathComponent("exe-icon-\(size).png")
         return FileManager.default.fileExists(atPath: url.path) ? (size, try Data(contentsOf: url)) : nil
     }
-    guard !pngs.isEmpty else { throw RefusedError(message: "no exe-icon-*.png in \(pngDir.path)") }
-    guard icons.count >= pngs.count else {
-        throw RefusedError(message: "the exe has \(icons.count) icon slots, \(pngs.count) needed")
-    }
+    guard !available.isEmpty else { throw RefusedError(message: "no exe-icon-*.png in \(pngDir.path)") }
     // the block the icon data occupies, which must hold nothing else
     let start = icons.map { $0.rva }.min()!, end = icons.map { $0.rva + $0.size }.max()!
     for r in all where r.type != rtIcon && r.rva < end && r.rva + r.size > start {
         throw RefusedError(message: "icon data is interleaved with other resources")
     }
-    let aligned = pngs.reduce(0) { ($0 + $1.data.count + 3) & ~3 }
-    guard aligned <= Int(end - start) else {
-        throw RefusedError(message: "new icons need \(aligned) bytes, the icon block has \(end - start)")
+    // as many sizes as the slots and bytes allow: the largest first (the Dock shows
+    // it), then 32 px (window title bars), then the rest
+    var pngs: [(size: Int, data: Data)] = [], aligned = 0
+    for size in [256, 32, 48, 16] {
+        guard pngs.count < icons.count, let png = available.first(where: { $0.size == size }) else { continue }
+        let need = (png.data.count + 3) & ~3
+        if aligned + need <= Int(end - start) { pngs.append(png); aligned += need }
+    }
+    guard !pngs.isEmpty else {
+        let least = available.map { ($0.data.count + 3) & ~3 }.min()!
+        throw RefusedError(message: "new icons need at least \(least) bytes, the icon block has \(end - start)")
+    }
+    pngs.sort { $0.size > $1.size }
+    if pngs.count < available.count {
+        let kept = pngs.map { "\($0.size)" }.joined(separator: ", ")
+        FileHandle.standardError.write("note: the exe has room for \(kept) px icons only\n".data(using: .utf8)!)
     }
     guard let groupSize = pe.bytes(of: group.group)?.count, 6 + 14 * pngs.count <= groupSize,
           let groupOffset = pe.offset(ofRVA: group.group.rva), let blockOffset = pe.offset(ofRVA: start) else {
@@ -1147,7 +1247,10 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
     if let from = recipe.install?.appIcon {
         let icns = iconDir.appendingPathComponent("AppIcon.icns")
         if !fm.fileExists(atPath: icns.path) {
-            try makeIcons(exe: game.appendingPathComponent(from), out: iconDir); note("made the app icon from \(from)")
+            // the stock exe, when exeIcon has already put the made icon into it
+            let stock = game.appendingPathComponent(from + ".bkp")
+            let exe = fm.fileExists(atPath: stock.path) ? stock : game.appendingPathComponent(from)
+            try makeIcons(exe: exe, out: iconDir); note("made the app icon from \(from)")
         }
     }
     if let target = recipe.install?.exeIcon {
@@ -1157,6 +1260,7 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
             do {
                 try patchExeIcon(exe: bkp, pngDir: iconDir, out: exe); note("put the icon into \(target) (stock kept as \(target).bkp)")
             } catch let e as RefusedError {
+                try? fm.removeItem(at: bkp)   // so a later install (a fixed tool) tries again
                 print("warning: \(target) keeps its own icon: \(e.message)")
             }
         }

@@ -2,41 +2,50 @@
 """Write minimal synthetic Windows PE files for the tests. No game data involved.
 
 usage: mkpe.py <out-file> [--64] [--console] [--size N] [--imports a.dll,b.dll]
-               [--broken-imports] [--text STRING] [--icons 16,32,48]
+               [--broken-imports] [--text STRING] [--icons 16,32,48] [--figure]
 
 --broken-imports points the import directory outside every section, the way a
 packed or encrypted executable looks to a reader. --text embeds a plain string.
 --icons adds a .rsrc section with one icon group of 24-bit BMP icons (with AND
 masks) at the given sizes, stored contiguously the way old games store them.
+--figure makes the icons a small disc on a transparent background (~80% transparent).
 """
 import argparse
 import struct
 
 
-def bmp_icon(n):
-    """A 24-bit n x n icon: a diagonal colour gradient, transparent 2 px border."""
+def bmp_icon(n, figure=False):
+    """A 24-bit n x n icon: a diagonal colour gradient, transparent 2 px border;
+    with figure, only a centred disc of radius n/4 is opaque."""
     row = (n * 3 + 3) & ~3
     pixels = bytearray()
     for y in range(n):
         line = bytearray()
         for x in range(n):
-            line += bytes(((x * 255) // n, (y * 255) // n, 128))
+            r, g = (x * 255) // n, (y * 255) // n
+            if figure:  # few colours, the way pixel art has them
+                r, g = r & 0xC0, g & 0xC0
+            line += bytes((r, g, 128))
         pixels += line + bytes(row - len(line))
     mask_row = ((n + 31) // 32) * 4
     mask = bytearray()
     for y in range(n):
         bits = bytearray(mask_row)
         for x in range(n):
-            if x < 2 or y < 2 or x >= n - 2 or y >= n - 2:
+            if figure:
+                clear = (x + 0.5 - n / 2) ** 2 + (y + 0.5 - n / 2) ** 2 > (n / 4) ** 2
+            else:
+                clear = x < 2 or y < 2 or x >= n - 2 or y >= n - 2
+            if clear:
                 bits[x // 8] |= 0x80 >> (x % 8)
         mask += bits
     header = struct.pack("<IiiHHIIiiII", 40, n, 2 * n, 1, 24, 0, len(pixels) + len(mask), 0, 0, 0, 0)
     return header + bytes(pixels) + bytes(mask)
 
 
-def rsrc_section(rva, sizes):
+def rsrc_section(rva, sizes, figure=False):
     """Resource tree: RT_ICON (3) ids 1..n and RT_GROUP_ICON (14) id 101, lang 1033."""
-    icons = [bmp_icon(n) for n in sizes]
+    icons = [bmp_icon(n, figure) for n in sizes]
     group = struct.pack("<HHH", 0, 1, len(icons)) + b"".join(
         struct.pack("<BBBBHHIH", n % 256, n % 256, 0, 0, 1, 24, len(ic), i + 1)
         for i, (n, ic) in enumerate(zip(sizes, icons)))
@@ -78,7 +87,7 @@ def rsrc_section(rva, sizes):
     return bytes(out)
 
 
-def build(is64, console, imports, broken, text, size, icons=()):
+def build(is64, console, imports, broken, text, size, icons=(), figure=False):
     file_align = 0x200
     sect_rva = 0x1000
     # one section holding the import descriptors, the DLL names and any extra text
@@ -96,7 +105,7 @@ def build(is64, console, imports, broken, text, size, icons=()):
         body += text.encode() + b"\0"
     raw = bytes(body) + bytes((-len(body)) % file_align)
     rsrc_rva = sect_rva + 0x1000
-    rsrc = rsrc_section(rsrc_rva, icons) if icons else b""
+    rsrc = rsrc_section(rsrc_rva, icons, figure) if icons else b""
     rsrc_raw = rsrc + bytes((-len(rsrc)) % file_align)
     nsect = 2 if icons else 1
 
@@ -147,11 +156,12 @@ def main():
     p.add_argument("--broken-imports", action="store_true")
     p.add_argument("--text", default="")
     p.add_argument("--icons", default="")
+    p.add_argument("--figure", action="store_true")
     a = p.parse_args()
     imports = [x for x in a.imports.split(",") if x]
     with open(a.out, "wb") as f:
         icons = [int(x) for x in a.icons.split(",") if x]
-        f.write(build(a.is64, a.console, imports, a.broken_imports, a.text, a.size, icons))
+        f.write(build(a.is64, a.console, imports, a.broken_imports, a.text, a.size, icons, a.figure))
 
 
 if __name__ == "__main__":
