@@ -116,8 +116,10 @@ final class Model: ObservableObject {
         runScript("launch.sh", [resources.path, String(variant), display], output: { _ in }, done: { [weak self] code, _ in
             guard let self else { return }
             self.busy = false; playing = false
-            if code == 2 { self.error = "The game could not be started. See Contents/Resources/logs/last-launch.log." }
-            if direct && code != 2 { NSApp.terminate(nil); return }
+            // launch.sh exits 0 whenever the game ran and ended (bottler-place.exe does not
+            // pass the game's own exit code on), so anything else means it never started
+            if code != 0 { self.error = "The game could not be started. See Contents/Resources/logs/last-launch.log." }
+            if direct && code == 0 { NSApp.terminate(nil); return }
             showWindow(self)
         })
     }
