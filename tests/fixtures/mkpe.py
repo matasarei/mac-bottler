@@ -2,7 +2,7 @@
 """Write minimal synthetic Windows PE files for the tests. No game data involved.
 
 usage: mkpe.py <out-file> [--64] [--console] [--size N] [--imports a.dll,b.dll]
-               [--broken-imports] [--text STRING] [--icons 16,32,48] [--figure | --card]
+               [--broken-imports] [--text STRING] [--icons 16,32,48] [--figure | --card] [--reloc]
 
 --broken-imports points the import directory outside every section, the way a
 packed or encrypted executable looks to a reader. --text embeds a plain string.
@@ -10,6 +10,7 @@ packed or encrypted executable looks to a reader. --text embeds a plain string.
 masks) at the given sizes, stored contiguously the way old games store them.
 --figure makes the icons a plus sign on a transparent background (~44% transparent once trimmed).
 --card makes them an opaque square over the middle 70%, with transparent margins.
+--reloc adds a .reloc section after .rsrc (so .rsrc cannot grow at the end).
 """
 import argparse
 import struct
@@ -94,7 +95,7 @@ def rsrc_section(rva, sizes, figure=False):
     return bytes(out)
 
 
-def build(is64, console, imports, broken, text, size, icons=(), figure=False):
+def build(is64, console, imports, broken, text, size, icons=(), figure=False, reloc=False):
     file_align = 0x200
     sect_rva = 0x1000
     # one section holding the import descriptors, the DLL names and any extra text
@@ -114,7 +115,8 @@ def build(is64, console, imports, broken, text, size, icons=(), figure=False):
     rsrc_rva = sect_rva + 0x1000
     rsrc = rsrc_section(rsrc_rva, icons, figure) if icons else b""
     rsrc_raw = rsrc + bytes((-len(rsrc)) % file_align)
-    nsect = 2 if icons else 1
+    nsect = (2 if icons else 1) + (1 if reloc else 0)
+    reloc_rva = rsrc_rva + ((len(rsrc) + 0xFFF) & ~0xFFF)
 
     opt_size = 240 if is64 else 224
     pe_off = 0x80
@@ -130,7 +132,7 @@ def build(is64, console, imports, broken, text, size, icons=(), figure=False):
     struct.pack_into("<H", opt, 0, 0x20B if is64 else 0x10B)
     struct.pack_into("<I", opt, 32, 0x1000)       # SectionAlignment
     struct.pack_into("<I", opt, 36, file_align)   # FileAlignment
-    struct.pack_into("<I", opt, 56, rsrc_rva + ((len(rsrc) + 0xFFF) & ~0xFFF) if icons else sect_rva + 0x1000)  # SizeOfImage
+    struct.pack_into("<I", opt, 56, (reloc_rva + 0x1000 if reloc else reloc_rva) if icons else sect_rva + 0x1000)  # SizeOfImage
     struct.pack_into("<I", opt, 60, headers_size)  # SizeOfHeaders
     struct.pack_into("<H", opt, 68, 3 if console else 2)  # Subsystem
     dirs = 112 if is64 else 96
@@ -145,9 +147,12 @@ def build(is64, console, imports, broken, text, size, icons=(), figure=False):
     if icons:
         section += struct.pack("<8sIIIIIIHHI", b".rsrc", len(rsrc), rsrc_rva, len(rsrc_raw),
                                headers_size + len(raw), 0, 0, 0, 0, 0x40000040)
+    if reloc:
+        section += struct.pack("<8sIIIIIIHHI", b".reloc", 8, reloc_rva, file_align,
+                               headers_size + len(raw) + len(rsrc_raw), 0, 0, 0, 0, 0x42000040)
     headers = bytes(mz) + coff + bytes(opt) + section
     headers += bytes(headers_size - len(headers))
-    out = headers + raw + rsrc_raw
+    out = headers + raw + rsrc_raw + (bytes(file_align) if reloc else b"")
     if size and size > len(out):
         out += bytes(size - len(out))
     return out
@@ -165,11 +170,12 @@ def main():
     p.add_argument("--icons", default="")
     p.add_argument("--figure", action="store_const", const="figure", default=False)
     p.add_argument("--card", dest="figure", action="store_const", const="card")
+    p.add_argument("--reloc", action="store_true")
     a = p.parse_args()
     imports = [x for x in a.imports.split(",") if x]
     with open(a.out, "wb") as f:
         icons = [int(x) for x in a.icons.split(",") if x]
-        f.write(build(a.is64, a.console, imports, a.broken_imports, a.text, a.size, icons, a.figure))
+        f.write(build(a.is64, a.console, imports, a.broken_imports, a.text, a.size, icons, a.figure, a.reloc))
 
 
 if __name__ == "__main__":

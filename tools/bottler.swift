@@ -652,11 +652,13 @@ func makeIcons(exe: URL, out: URL) throws {
 
 struct RefusedError: Error { let message: String }
 
-/// Replace an exe's icons in place: the new PNG icons go into the existing block
-/// of RT_ICON data, the RT_ICON entries are re-pointed and the group is rewritten
-/// in its own slot. Nothing moves: a full resource rebuild (rcedit) broke a game
-/// with self-modifying code. Refuses unless everything fits, the size is unchanged
-/// and every changed byte is inside the resource section.
+/// Replace an exe's icons without moving anything: a full resource rebuild (rcedit)
+/// broke a game with self-modifying code. The new PNG icons go into the existing
+/// block of RT_ICON data; when they do not fit there and .rsrc is the file's last
+/// section (unsigned, nothing after it), they are appended at its end instead and
+/// only its size fields grow. The RT_ICON entries are re-pointed and the group is
+/// rewritten in its own slot. Refuses unless every changed byte is inside .rsrc (or,
+/// when growing, one of those size fields).
 func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     let original = try Data(contentsOf: exe)
     let pe = try PEFile(data: original)
@@ -675,19 +677,36 @@ func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     for r in all where r.type != rtIcon && r.rva < end && r.rva + r.size > start {
         throw RefusedError(message: "icon data is interleaved with other resources")
     }
-    // as many sizes as the slots and bytes allow: the largest first (the Dock shows
-    // it), then 32 px (window title bars), then the rest
-    var pngs: [(size: Int, data: Data)] = [], aligned = 0
-    for size in [256, 32, 48, 16] {
-        guard pngs.count < icons.count, let png = available.first(where: { $0.size == size }) else { continue }
-        let need = (png.data.count + 3) & ~3
-        if aligned + need <= Int(end - start) { pngs.append(png); aligned += need }
+    // Where the new icons go: in the old block when they fit; otherwise, when .rsrc is
+    // the file's last section (nothing after it, no signature), appended at its end,
+    // which moves nothing; otherwise as many sizes as fit in the old block.
+    let priority = [256, 32, 48, 16]   // the Dock shows the largest, title bars 32 px
+    func choose(room: Int?) -> [(size: Int, data: Data)] {
+        var chosen: [(size: Int, data: Data)] = [], used = 0
+        for size in priority {
+            guard chosen.count < icons.count, let png = available.first(where: { $0.size == size }) else { continue }
+            let need = (png.data.count + 3) & ~3
+            if room == nil || used + need <= room! { chosen.append(png); used += need }
+        }
+        return chosen.sorted { $0.size > $1.size }
     }
+    let secStart = Int(original.u32(0x3C)) + 24 + Int(original.u16(Int(original.u32(0x3C)) + 20))
+    let rsrcIndex = pe.sections.firstIndex { $0.name == ".rsrc" }
+    let canGrow: Bool = {
+        guard let k = rsrcIndex else { return false }
+        let r = pe.sections[k]
+        let last = pe.sections.allSatisfy { $0.rva <= r.rva && $0.rawOffset <= r.rawOffset }
+        let signed = pe.dataDirectories.count > 4 && pe.dataDirectories[4].rva != 0
+        return last && !signed && Int(r.rawOffset + r.rawSize) == original.count
+    }()
+    var pngs = choose(room: Int(end - start))
+    let ideal = choose(room: nil)
+    let grow = canGrow && ideal.map { $0.size } != pngs.map { $0.size }
+    if grow { pngs = ideal }
     guard !pngs.isEmpty else {
         let least = available.map { ($0.data.count + 3) & ~3 }.min()!
         throw RefusedError(message: "new icons need at least \(least) bytes, the icon block has \(end - start)")
     }
-    pngs.sort { $0.size > $1.size }
     if pngs.count < available.count {
         let kept = pngs.map { "\($0.size)" }.joined(separator: ", ")
         FileHandle.standardError.write("note: the exe has room for \(kept) px icons only\n".data(using: .utf8)!)
@@ -698,16 +717,42 @@ func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     }
 
     var d = original
-    d.replaceSubrange(blockOffset..<blockOffset + Int(end - start), with: Data(count: Int(end - start)))
-    var rva = start
-    var placed: [(size: Int, rva: UInt32, length: Int, id: UInt32)] = []
-    for (i, png) in pngs.enumerated() {
-        let o = blockOffset + Int(rva - start)
-        d.replaceSubrange(o..<o + png.data.count, with: png.data)
-        placed.append((png.size, rva, png.data.count, icons[i].id))
-        rva = (rva + UInt32(png.data.count) + 3) & ~3
-    }
     func put32(_ v: UInt32, _ o: Int) { withUnsafeBytes(of: v.littleEndian) { d.replaceSubrange(o..<o + 4, with: $0) } }
+    var placed: [(size: Int, rva: UInt32, length: Int, id: UInt32)] = []
+    var headerFields: [Range<Int>] = []   // header bytes growing is allowed to change
+    if grow, let k = rsrcIndex {
+        let r = pe.sections[k]
+        // new data from the end of what the section maps (raw or virtual, whichever is
+        // larger), so RVA and file offset keep the section's fixed relation
+        let from = (Int(max(r.virtualSize, r.rawSize)) + 3) & ~3
+        d.append(Data(count: from - Int(r.rawSize)))
+        for (i, png) in pngs.enumerated() {
+            placed.append((png.size, r.rva + UInt32(d.count - Int(r.rawOffset)), png.data.count, icons[i].id))
+            d.append(png.data); d.append(Data(count: (4 - png.data.count % 4) % 4))
+        }
+        let opt = Int(original.u32(0x3C)) + 24
+        let fileAlign = Int(original.u32(opt + 36)), sectAlign = Int(original.u32(opt + 32))
+        let virtualSize = d.count - Int(r.rawOffset)
+        d.append(Data(count: (fileAlign - d.count % fileAlign) % fileAlign))
+        let header = secStart + 40 * k
+        put32(UInt32(virtualSize), header + 8)                       // VirtualSize
+        put32(UInt32(d.count - Int(r.rawOffset)), header + 16)       // SizeOfRawData
+        let image = (Int(r.rva) + virtualSize + sectAlign - 1) / sectAlign * sectAlign
+        put32(UInt32(max(Int(original.u32(opt + 56)), image)), opt + 56)   // SizeOfImage
+        let dirs = opt + (pe.is64 ? 112 : 96)
+        let resDir = pe.dataDirectories[2]
+        put32(UInt32(Int(r.rva) + virtualSize) - resDir.rva, dirs + 2 * 8 + 4)   // resource directory size
+        headerFields = [header + 8..<header + 12, header + 16..<header + 20, opt + 56..<opt + 60, dirs + 20..<dirs + 24]
+    } else {
+        d.replaceSubrange(blockOffset..<blockOffset + Int(end - start), with: Data(count: Int(end - start)))
+        var rva = start
+        for (i, png) in pngs.enumerated() {
+            let o = blockOffset + Int(rva - start)
+            d.replaceSubrange(o..<o + png.data.count, with: png.data)
+            placed.append((png.size, rva, png.data.count, icons[i].id))
+            rva = (rva + UInt32(png.data.count) + 3) & ~3
+        }
+    }
     for (i, icon) in icons.enumerated() {
         let p = placed[min(i, placed.count - 1)]   // spare slots point at the smallest icon
         put32(p.rva, icon.entryOffset); put32(UInt32(p.length), icon.entryOffset + 4)
@@ -723,8 +768,8 @@ func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     d.replaceSubrange(groupOffset..<groupOffset + groupSize, with: g + Data(count: groupSize - g.count))
     put32(UInt32(g.count), group.group.entryOffset + 4)
 
-    guard d.count == original.count else { throw RefusedError(message: "size changed") }
-    for i in 0..<d.count where d[i] != original[i] && !rsrcRange.contains(i) {
+    guard grow || d.count == original.count else { throw RefusedError(message: "size changed") }
+    for i in 0..<original.count where d[i] != original[i] && !rsrcRange.contains(i) && !headerFields.contains(where: { $0.contains(i) }) {
         throw RefusedError(message: String(format: "byte 0x%x outside .rsrc would change", i))
     }
     try d.write(to: out, options: .atomic)

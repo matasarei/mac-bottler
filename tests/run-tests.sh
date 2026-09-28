@@ -127,8 +127,35 @@ import os, sys
 from PIL import Image
 os.makedirs(sys.argv[1], exist_ok=True)
 Image.frombytes('RGBA', (256, 256), os.urandom(256 * 256 * 4)).save(sys.argv[1] + '/exe-icon-256.png')" "$I/big"
-"$T/bottler" exe-icon "$I/game.exe" "$I/big" "$I/refused.exe" 2>/dev/null; rc=$?
-if [ $rc -eq 3 ] && [ ! -e "$I/refused.exe" ]; then ok; else bad "oversized icons are refused (exit 3, no output), got $rc"; fi
+pe "$I/reloc.exe" --imports KERNEL32.dll --icons 16,24,32,48,64 --reloc
+"$T/bottler" exe-icon "$I/reloc.exe" "$I/big" "$I/refused.exe" 2>/dev/null; rc=$?
+if [ $rc -eq 3 ] && [ ! -e "$I/refused.exe" ]; then ok; else bad "oversized icons with a section after .rsrc are refused (exit 3, no output), got $rc"; fi
+# .rsrc is the last section: icons that do not fit in place are appended at its end;
+# nothing before .rsrc moves, and every size arrives
+python3 -c "
+import os, sys
+from PIL import Image
+os.makedirs(sys.argv[1], exist_ok=True)
+Image.frombytes('RGB', (1024, 1024), os.urandom(1024 * 1024 * 3)).save(sys.argv[1] + '/photo.png')" "$I/photo-src"
+"$T/bottler" icon "$I/photo-src/photo.png" "$I/photo" >/dev/null
+pe "$I/small.exe" --imports KERNEL32.dll --icons 16,32
+if "$T/bottler" exe-icon "$I/small.exe" "$I/photo" "$I/grown.exe" 2>/dev/null; then ok; else bad "a large icon grows a last .rsrc"; fi
+if python3 - "$I/small.exe" "$I/grown.exe" <<'PY'
+import struct, sys
+a, b = open(sys.argv[1], "rb").read(), open(sys.argv[2], "rb").read()
+pe = struct.unpack_from("<I", a, 0x3C)[0]
+n = struct.unpack_from("<H", a, pe + 6)[0]; opt = struct.unpack_from("<H", a, pe + 20)[0]
+secs = [struct.unpack_from("<8sIIII", a, pe + 24 + opt + 40 * i) for i in range(n)]
+rsrc = [s for s in secs if s[0].rstrip(b"\0") == b".rsrc"][0]
+hdr = pe + 24 + opt + 40 * n
+first = min(s[4] for s in secs)
+# the code and data sections are byte for byte the same; the old resources are only re-pointed
+sys.exit(0 if len(b) > len(a) and a[hdr:rsrc[4]] == b[hdr:rsrc[4]] and a[:pe + 24 + 56] == b[:pe + 24 + 56] else 1)
+PY
+then ok; else bad "growing .rsrc leaves everything before it unchanged"; fi
+if "$T/bottler" icon "$I/grown.exe" "$I/grown-icons" >/dev/null 2>&1 && [ "$(px "$I/grown-icons/exe-icon-256.png" 128 128)" = "256 255" ] \
+   && python3 -c "import sys; from PIL import Image; a=Image.open(sys.argv[1]).convert('RGBA'); b=Image.open(sys.argv[2]).convert('RGBA'); sys.exit(0 if a.getpixel((128,128))==b.getpixel((128,128)) and a.getpixel((60,200))==b.getpixel((60,200)) else 1)" "$I/photo/exe-icon-256.png" "$I/grown-icons/exe-icon-256.png"
+then ok; else bad "the grown exe carries the new 256 px icon"; fi
 pe "$I/noicon.exe" --imports KERNEL32.dll
 "$T/bottler" icon "$I/noicon.exe" "$I/none" 2>/dev/null; rc=$?
 if [ $rc -eq 2 ]; then ok; else bad "exe without icons: icon exits 2, got $rc"; fi

@@ -84,6 +84,11 @@ found on; the lesson is written so it applies to other games too.
   with PNG icons (256/48/32/16), re-point the RT_ICON entries and rewrite the group
   icon in its own slot, and refuse unless every changed byte stays inside `.rsrc`
   and the file size is unchanged.
+- **When the icons do not fit in place and `.rsrc` is the file's last section**
+  (unsigned, nothing after it: Nox's `Game.exe`, this Counter-Strike copy's `hl.exe`),
+  the new icon data is appended at the end of `.rsrc` and only its size fields,
+  `SizeOfImage` and the resource directory size change. Nothing before `.rsrc` moves.
+  An exe with a section after it (SMAC's `terranx.exe`: `.reloc`) stays in place.
 - **Some exes have very little room for icons.** Nox's `Game.exe` has two slots
   and 2960 bytes. The exe icons are therefore written as indexed PNGs whenever they
   have 256 colours or fewer (lossless; a plated 256 px pixel-art icon is ~2.6 KB),
