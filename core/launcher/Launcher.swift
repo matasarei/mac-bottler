@@ -1,6 +1,9 @@
-// The launcher window every mac-bottler app shares. The game is installed when
-// the app is built, so it shows only what the player can choose: the game variant
-// (if the recipe has several), the display (if several are connected) and Play.
+// The launcher every mac-bottler app shares. The game is installed when the app is
+// built, so the window shows only what the player can choose: the game variant (if
+// the recipe has several), the display (if several are connected) and Play. With
+// nothing to choose there is no window: the game starts at once and the app quits
+// with it (hold Option while opening the app to see the window anyway). The app is
+// a background app (LSUIElement) and takes a Dock tile only while its window shows.
 // Everything else is decided per launch by Resources/bin/launch.sh.
 import AppKit
 import SwiftUI
@@ -94,10 +97,16 @@ final class Model: ObservableObject {
         }
     }
 
-    /// The launcher's window: closed while the game runs, shown again after.
-    var window: NSWindow? { NSApp.windows.first { $0.isVisible || $0.title == recipe.title } }
+    /// The launcher's window: put away while the game runs, shown again after.
+    var window: NSWindow? { launcherWindow }
 
-    func play() {
+    /// Nothing to choose: one variant, one display (and the game is installed).
+    var nothingToChoose: Bool { installed && recipe.launch.variants.count == 1 && displays.count == 1 }
+
+    /// Starts the game. With a window, it is put away while the game runs and shown
+    /// again after; without one (`direct`), the app quits with the game unless the
+    /// game could not be started, which the window then explains.
+    func play(direct: Bool = false) {
         Conf.write(["VARIANT": String(variant), "DISPLAY": display])
         busy = true; error = ""; playing = true
         let w = window
@@ -107,12 +116,29 @@ final class Model: ObservableObject {
         runScript("launch.sh", [resources.path, String(variant), display], output: { _ in }, done: { [weak self] code, _ in
             guard let self else { return }
             self.busy = false; playing = false
-            if code == 2 { self.error = "The game could not be started. See Contents/Resources/logs/last-launch.log." }
-            NSApp.setActivationPolicy(.regular)
-            w?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            // launch.sh exits 0 whenever the game ran and ended (bottler-place.exe does not
+            // pass the game's own exit code on), so anything else means it never started
+            if code != 0 { self.error = "The game could not be started. See Contents/Resources/logs/last-launch.log." }
+            if direct && code == 0 { NSApp.terminate(nil); return }
+            showWindow(self)
         })
     }
+}
+
+/// The launcher window, made when first needed; the app joins the Dock while it shows.
+var launcherWindow: NSWindow?
+func showWindow(_ model: Model) {
+    if launcherWindow == nil {
+        let w = NSWindow(contentViewController: NSHostingController(rootView: LauncherView(model: model)))
+        w.title = recipe.title
+        w.styleMask = [.titled, .closable, .miniaturizable]
+        w.isReleasedWhenClosed = false
+        w.center()
+        launcherWindow = w
+    }
+    NSApp.setActivationPolicy(.regular)
+    launcherWindow?.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
 }
 
 struct LauncherView: View {
@@ -136,7 +162,7 @@ struct LauncherView: View {
                     }
                     .frame(maxWidth: 320)
                 }
-                Button(action: model.play) {
+                Button(action: { model.play() }) {
                     Text("Play").font(.title2).frame(maxWidth: 200).padding(.vertical, 6)
                 }
                 .keyboardShortcut(.defaultAction)
@@ -156,19 +182,51 @@ struct LauncherView: View {
     }
 }
 
-@main
-struct LauncherApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @StateObject private var model = Model()
+/// NSApplication does not retain its delegate: this global keeps it alive.
+let appDelegate = AppDelegate()
 
-    var body: some Scene {
-        Window(recipe.title, id: "main") { LauncherView(model: model) }
-            .windowResizability(.contentSize)
+@main
+enum LauncherMain {
+    static func main() {
+        let app = NSApplication.shared
+        app.delegate = appDelegate
+        app.run()
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    // the window hides while playing; an app quit in that state would reopen hidden
-    func applicationDidFinishLaunching(_ note: Notification) { NSApp.unhide(nil) }
+    let model = Model()
+
+    func applicationDidFinishLaunching(_ note: Notification) {
+        NSApp.mainMenu = mainMenu()
+        NSApp.unhide(nil)   // an app quit while hidden (its window put away) reopens hidden
+        if model.nothingToChoose && !NSEvent.modifierFlags.contains(.option) {
+            model.play(direct: true)
+        } else {
+            showWindow(model)
+        }
+    }
+
+    // opening the app again (Finder, Dock) while it runs without a window
+    func applicationShouldHandleReopen(_ app: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !playing && !hasVisibleWindows { showWindow(model) }
+        return true
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { !playing }
+}
+
+/// The menus the window needs: Hide and Quit, and Close, with their usual shortcuts.
+func mainMenu() -> NSMenu {
+    let menu = NSMenu(), appItem = NSMenuItem(), appMenu = NSMenu()
+    appMenu.addItem(withTitle: "Hide \(recipe.title)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    appMenu.addItem(.separator())
+    appMenu.addItem(withTitle: "Quit \(recipe.title)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    appItem.submenu = appMenu
+    menu.addItem(appItem)
+    let windowItem = NSMenuItem(), windowMenu = NSMenu(title: "Window")
+    windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+    windowItem.submenu = windowMenu
+    menu.addItem(windowItem)
+    return menu
 }
