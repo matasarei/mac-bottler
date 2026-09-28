@@ -5,7 +5,13 @@ A recipe is a folder `recipes/<game>/` with:
 - `recipe.json`: how the game is detected, installed and launched (schema below);
 - `notes.md`: what was tried on this game and why, including what failed;
 
-It is the only place anything game-specific lives. `bottler recipe-check
+It is the only place anything game-specific lives.
+
+A recipe that should not be public (for one particular copy of a game) goes in
+`recipes.local/<name>/` (git-ignored), where `make project RECIPE=<name>` finds it
+after `recipes/`. For a one-off, it can also live in its project: `make project NAME=<name> RECIPE=<path to a recipe folder>
+GAME=…` copies the folder to `projects/<name>/recipe/` (git-ignored) and the
+project builds from it. `bottler recipe-check
 recipes/<game>/recipe.json` validates it; unknown keys are errors, so a typo fails
 the build instead of the game.
 
@@ -81,14 +87,16 @@ the build instead of the game.
 | `install.downloads` | pinned archives fetched at build time: `url`, `sha256`, and `files` mapping a path inside the archive to a path in the game folder. Zip only for now. |
 | `install.ini` | INI edits applied at install; the section is created and keys added when missing; CRLF files stay CRLF |
 | `install.proxy` | `dll` in the game folder is renamed `<name>_orig.dll` and replaced by a proxy forwarding every export to it. The export list is read from the project's own copy of the DLL at build time (`win/proxy.sh def`), so nothing derived from the game is in the repo. |
-| `install.appIcon` | the exe whose icon becomes the app icon (`bottler icon`) |
+| `install.appIcon` | the exe whose icon becomes the app icon (`bottler icon`); a project's own `projects/<name>/icon.*` wins over it |
+| `install.registry` | `.reg` files in the game folder, imported into the prefix at every build (the prefix is rebuilt from the cache each time); a listed file missing from the game refuses the install |
 | `install.exeIcon` | the exe that gets that icon written into it in place (`bottler exe-icon`), so the Dock shows it; the stock exe is kept as `<exe>.bkp` |
-| `launch.variants` | what the player can start: `label`, `exe` (relative to the game folder), `args` |
-| `launch.window.mode` | `native` or `pillarbox:<w>:<h>` (see `bottler geometry`) |
+| `launch.variants` | what the player can start: `label`, `exe` (relative to the game folder), `args` (`{w}`, `{h}`, `{x}`, `{y}` are the window's geometry) |
+| `launch.window.mode` | `native` or `pillarbox:<w>:<h>` (see `bottler geometry`): the window is kept at that rect. `fullscreen`: the game switches to full screen itself and owns its window (never moved: moving an OpenGL window turned it black); `{w}`/`{h}` are the display's full width by the tallest display mode below the notch, so the scale stays the same |
 | `launch.window.align` | round the window's sides down to a multiple of this |
 | `launch.window.backdrop` | black backdrop behind the window (`bottler frame`) |
 | `launch.window.menubar` | `hide` (auto-hide while playing) or `keep` |
 | `launch.window.title` | text the game window's title contains, when the largest window is not the game's |
 | `launch.ini` | INI edits applied at every launch; `{w}`, `{h}`, `{x}`, `{y}` are the window's geometry |
+| `launch.registry` | registry values set before every launch: `key` (`HKCU\…` or `HKLM\…`) and `set` (name → `dword:<number>` or a string; `{w}` `{h}` `{x}` `{y}` allowed), imported in one `regedit` call. For settings a game keeps in the registry and would otherwise override the command line with |
 | `launch.env` | extra environment variables for wine |
 | `launch.dllOverrides` | `WINEDLLOVERRIDES` entries, e.g. `{"ddraw": "n,b"}` |

@@ -84,6 +84,11 @@ found on; the lesson is written so it applies to other games too.
   with PNG icons (256/48/32/16), re-point the RT_ICON entries and rewrite the group
   icon in its own slot, and refuse unless every changed byte stays inside `.rsrc`
   and the file size is unchanged.
+- **When the icons do not fit in place and `.rsrc` is the file's last section**
+  (unsigned, nothing after it: Nox's `Game.exe`, this Counter-Strike copy's `hl.exe`),
+  the new icon data is appended at the end of `.rsrc` and only its size fields,
+  `SizeOfImage` and the resource directory size change. Nothing before `.rsrc` moves.
+  An exe with a section after it (SMAC's `terranx.exe`: `.reloc`) stays in place.
 - **Some exes have very little room for icons.** Nox's `Game.exe` has two slots
   and 2960 bytes. The exe icons are therefore written as indexed PNGs whenever they
   have 256 colours or fewer (lossless; a plated 256 px pixel-art icon is ~2.6 KB),
@@ -93,11 +98,20 @@ found on; the lesson is written so it applies to other games too.
 - **ImageIO ignores the AND mask of 24-bit BMP icons** (it applies it to 4- and
   8-bit ones): the transparent parts decode opaque. `largestIcon` clears the masked
   pixels itself.
+- **Transparent margins are trimmed first**: the icon is cut to the square around
+  what it draws. An icon already drawn as a rounded card for macOS (this
+  Counter-Strike copy's `hl.exe`) then fills the body instead of going on a plate.
 - **A figure on a transparent background goes on a plate.** When at least 30% of
-  the icon is transparent (Nox's mask: 44%, SMAC's `terranx.exe`: 56%), filling the
+  the (trimmed) icon is transparent (Nox's mask: 44%, SMAC's `terranx.exe`: 56%), filling the
   squircle would cut the figure and leave holes, so it is drawn whole on a flat
   stone-coloured plate at a whole-pixel scale. Pictures (SMAC's `terran.exe`: 0%; a
   round icon is ~21%) still fill the body.
+- **The exe's icon is re-patched from the stock `.bkp` at every install**, and
+  only rewritten when the bytes differ, so a changed icon (a project's `icon.*`)
+  reaches the Dock too. Exes are recognised by their `MZ` header, not their name
+  (`Game.exe.bkp`).
+- **Large images are scaled down to the body**, not cropped: the fill rule was
+  written for 32-48 px exe icons, scaled up by whole pixels.
 - **The app icon is made from the stock exe** (`<exe>.bkp`) when `appIcon` and
   `exeIcon` name the same exe: a rebuild keeps the installed game, whose exe
   already carries the made icon.

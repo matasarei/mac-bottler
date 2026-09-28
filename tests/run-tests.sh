@@ -6,12 +6,16 @@ cd "$(dirname "$0")/.."
 AUDIT_FAIL=0
 while IFS= read -r f; do
     case "$(echo "$f" | tr '[:upper:]' '[:lower:]')" in
-        *.exe|*.dll|*.sys|*.icd|*.pcx|*.bmp|*.png|*.jpg|*.ico|*.icns|*.wav|*.mp3|*.ogg|*.flc|*.wve|*.bik|*.cvr|*.sav|*.mpq|*.ttf|*.fon|*.zip|*.7z|*.tar*|*.dmg|*.iso)
+        *.exe|*.dll|*.sys|*.icd|*.pcx|*.bmp|*.png|*.jpg|*.ico|*.icns|*.wav|*.mp3|*.ogg|*.flc|*.wve|*.bik|*.cvr|*.sav|*.mpq|*.ttf|*.fon|*.zip|*.7z|*.tar*|*.dmg|*.iso|*.reg)
             echo "FAIL: repo tracks a game/media/archive file: $f"; AUDIT_FAIL=1 ;;
     esac
     if [ -f "$f" ] && ! grep -Iq . "$f" 2>/dev/null && [ -s "$f" ]; then echo "FAIL: repo tracks a binary file: $f"; AUDIT_FAIL=1; fi
     if [ -f "$f" ] && [ "$(stat -f %z "$f")" -gt 204800 ]; then echo "FAIL: repo tracks a file over 200 KB: $f"; AUDIT_FAIL=1; fi
 done < <(git ls-files)
+# CD keys and serials (five groups of five letters and digits, and the like) belong to a player's copy
+if git ls-files -z | xargs -0 grep -IlE '\b[A-Z0-9]{4,6}(-[A-Z0-9]{4,6}){3,5}\b' 2>/dev/null; then
+    echo "FAIL: repo tracks something shaped like a CD key or serial (files above)"; AUDIT_FAIL=1
+fi
 [ "$AUDIT_FAIL" -eq 0 ] || exit 1
 
 command -v python3 >/dev/null && python3 -c "import PIL" 2>/dev/null \
@@ -123,8 +127,35 @@ import os, sys
 from PIL import Image
 os.makedirs(sys.argv[1], exist_ok=True)
 Image.frombytes('RGBA', (256, 256), os.urandom(256 * 256 * 4)).save(sys.argv[1] + '/exe-icon-256.png')" "$I/big"
-"$T/bottler" exe-icon "$I/game.exe" "$I/big" "$I/refused.exe" 2>/dev/null; rc=$?
-if [ $rc -eq 3 ] && [ ! -e "$I/refused.exe" ]; then ok; else bad "oversized icons are refused (exit 3, no output), got $rc"; fi
+pe "$I/reloc.exe" --imports KERNEL32.dll --icons 16,24,32,48,64 --reloc
+"$T/bottler" exe-icon "$I/reloc.exe" "$I/big" "$I/refused.exe" 2>/dev/null; rc=$?
+if [ $rc -eq 3 ] && [ ! -e "$I/refused.exe" ]; then ok; else bad "oversized icons with a section after .rsrc are refused (exit 3, no output), got $rc"; fi
+# .rsrc is the last section: icons that do not fit in place are appended at its end;
+# nothing before .rsrc moves, and every size arrives
+python3 -c "
+import os, sys
+from PIL import Image
+os.makedirs(sys.argv[1], exist_ok=True)
+Image.frombytes('RGB', (1024, 1024), os.urandom(1024 * 1024 * 3)).save(sys.argv[1] + '/photo.png')" "$I/photo-src"
+"$T/bottler" icon "$I/photo-src/photo.png" "$I/photo" >/dev/null
+pe "$I/small.exe" --imports KERNEL32.dll --icons 16,32
+if "$T/bottler" exe-icon "$I/small.exe" "$I/photo" "$I/grown.exe" 2>/dev/null; then ok; else bad "a large icon grows a last .rsrc"; fi
+if python3 - "$I/small.exe" "$I/grown.exe" <<'PY'
+import struct, sys
+a, b = open(sys.argv[1], "rb").read(), open(sys.argv[2], "rb").read()
+pe = struct.unpack_from("<I", a, 0x3C)[0]
+n = struct.unpack_from("<H", a, pe + 6)[0]; opt = struct.unpack_from("<H", a, pe + 20)[0]
+secs = [struct.unpack_from("<8sIIII", a, pe + 24 + opt + 40 * i) for i in range(n)]
+rsrc = [s for s in secs if s[0].rstrip(b"\0") == b".rsrc"][0]
+hdr = pe + 24 + opt + 40 * n
+first = min(s[4] for s in secs)
+# the code and data sections are byte for byte the same; the old resources are only re-pointed
+sys.exit(0 if len(b) > len(a) and a[hdr:rsrc[4]] == b[hdr:rsrc[4]] and a[:pe + 24 + 56] == b[:pe + 24 + 56] else 1)
+PY
+then ok; else bad "growing .rsrc leaves everything before it unchanged"; fi
+if "$T/bottler" icon "$I/grown.exe" "$I/grown-icons" >/dev/null 2>&1 && [ "$(px "$I/grown-icons/exe-icon-256.png" 128 128)" = "256 255" ] \
+   && python3 -c "import sys; from PIL import Image; a=Image.open(sys.argv[1]).convert('RGBA'); b=Image.open(sys.argv[2]).convert('RGBA'); sys.exit(0 if a.getpixel((128,128))==b.getpixel((128,128)) and a.getpixel((60,200))==b.getpixel((60,200)) else 1)" "$I/photo/exe-icon-256.png" "$I/grown-icons/exe-icon-256.png"
+then ok; else bad "the grown exe carries the new 256 px icon"; fi
 pe "$I/noicon.exe" --imports KERNEL32.dll
 "$T/bottler" icon "$I/noicon.exe" "$I/none" 2>/dev/null; rc=$?
 if [ $rc -eq 2 ]; then ok; else bad "exe without icons: icon exits 2, got $rc"; fi
@@ -139,6 +170,21 @@ rgb() { python3 -c "import sys; from PIL import Image; print(*Image.open(sys.arg
 if [ "$(rgb "$I/fig/icon_1024.png" 160 512)" = "170 165 154 255" ]; then ok; else bad "figure: the plate fills the body, got $(rgb "$I/fig/icon_1024.png" 160 512)"; fi
 if [ "$(px "$I/fig/icon_1024.png" 0 0)" = "1024 0" ]; then ok; else bad "figure: the corner stays transparent"; fi
 if [ "$(px "$I/out/icon_1024.png" 150 512)" = "1024 255" ] && [ "$(px "$I/out/icon_1024.png" 60 512)" = "1024 0" ]; then ok; else bad "a picture still fills the body, no plate"; fi
+# an opaque card with transparent margins (an icon already drawn for macOS) fills the body
+pe "$I/card.exe" --imports KERNEL32.dll --icons 32 --card
+"$T/bottler" icon "$I/card.exe" "$I/card" >/dev/null
+EDGE="$(rgb "$I/card/icon_1024.png" 115 512)"
+if [ "${EDGE##* }" = "255" ] && [ "$EDGE" != "170 165 154 255" ]; then ok; else bad "a card with margins is trimmed and fills the body, no plate: edge is $EDGE"; fi
+# a large image (a finished round macOS icon): scaled down to the body, not cropped
+python3 -c "
+import sys
+from PIL import Image, ImageDraw
+im = Image.new('RGBA', (1024, 1024), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+d.ellipse((0, 0, 1023, 1023), fill=(255, 0, 0, 255)); d.ellipse((60, 60, 963, 963), fill=(0, 0, 255, 255))
+im.save(sys.argv[1])" "$I/round.png"
+if "$T/bottler" icon "$I/round.png" "$I/round" >/dev/null; then ok; else bad "icon takes an image file"; fi
+EDGE="$(rgb "$I/round/icon_1024.png" 112 512)"
+if [ "$EDGE" = "255 0 0 255" ]; then ok; else bad "a large image is scaled to the body, its rim kept (not cropped): edge is $EDGE"; fi
 mode() { python3 -c "import sys; from PIL import Image; print(Image.open(sys.argv[1]).mode)" "$1"; }
 if [ "$(mode "$I/fig/exe-icon-256.png")" = "P" ]; then ok; else bad "few-colour exe icon is a palette PNG"; fi
 # two icon slots with ~4 KB of room: the largest icon still goes in, the rest is left out
@@ -192,6 +238,13 @@ pe "$X/x64.dll" --64 --imports KERNEL32.dll
 win/proxy.sh def "$X/x64.dll" >/dev/null 2>&1; rc=$?
 expect "64-bit DLLs are refused" "1" "$rc"
 if i686-w64-mingw32-gcc -O2 -mwindows -o "$X/bottler-place.exe" win/place.c 2>/dev/null; then ok; else bad "place.c builds"; fi
+# the game's command line: quoted only where needed (old games parse it themselves)
+cc -o "$X/cmdline-test" tests/fixtures/cmdline-test.c
+expect "plain args are not quoted" 'C:\Game\hl.exe -game cstrike -windowed' "$("$X/cmdline-test" 'C:\Game\hl.exe' -game cstrike -windowed)"
+expect "args with spaces, quotes and empty ones are quoted and escaped" \
+    '"C:\My Game\a.exe" "two words" "" "say \"hi\"" "trail dir\\"' \
+    "$("$X/cmdline-test" 'C:\My Game\a.exe' 'two words' '' 'say "hi"' 'trail dir\')"
+if grep -q 'append_arg' win/place.c; then ok; else bad "place.c builds the command line with append_arg"; fi
 
 # --- recipes: check, fetch, install on a fake game built here
 R="$T/recipe"; SRC="$R/source"; mkdir -p "$SRC/saves" "$R/recipe" "$R/zip/mod/sub"
@@ -293,17 +346,34 @@ if [ -s "$A/icon/AppIcon.icns" ]; then ok; else bad "install.sh icons go to Reso
 bash core/install.sh "$A" "$T/does-not-exist" >/dev/null 2>&1; rc=$?
 expect "install.sh: missing source exits 2" "2" "$rc"
 
+# --- desktop save/restore: the menu bar and Dock settings as the player had them
+# (test preference domains: the player's real settings are never touched)
+export BOTTLER_TEST_PREFS="local.bottler.test.$$"
+TG="$BOTTLER_TEST_PREFS.global"; TD="$BOTTLER_TEST_PREFS.dock"
+defaults write "$TD" autohide -bool false; defaults delete "$TG" _HIHideMenuBar 2>/dev/null
+SNAP="$T/desktop.json"; rm -f "$SNAP"
+"$T/bottler" desktop save "$SNAP"
+defaults write "$TD" autohide -bool true; "$T/bottler" menubar hide   # what a game run may leave behind
+expect "menubar hide sets the preference" "1" "$(defaults read "$TG" _HIHideMenuBar 2>/dev/null)"
+"$T/bottler" desktop save "$SNAP"   # a stranded snapshot is the original: never overwritten
+"$T/bottler" desktop restore "$SNAP"
+expect "restore brings the Dock back as it was" "0" "$(defaults read "$TD" autohide 2>/dev/null)"
+expect "restore brings the menu bar back as it was (unset)" "unset" "$(defaults read "$TG" _HIHideMenuBar 2>/dev/null || echo unset)"
+if [ ! -e "$SNAP" ]; then ok; else bad "restore removes the snapshot"; fi
+defaults delete "$TG" 2>/dev/null; defaults delete "$TD" 2>/dev/null; unset BOTTLER_TEST_PREFS
+
 # --- core/launch.sh with a stub wine and a recording bottler
 L="$PWD/$T/launch/Contents/Resources"; mkdir -p "$L/bin" "$L/wine/bin" "$L/prefix/drive_c/Game" "$L/recipe"
 ln -s prefix/drive_c/Game "$L/game"
 cp core/launch.sh core/wine-env.sh "$L/bin/"
 cat > "$L/bin/bottler" <<STUB
 #!/bin/bash
-case "\$1" in frame|menubar) echo "\$*" >> "$L/calls"; exit 0 ;; esac
+case "\$1" in frame|menubar|desktop) echo "\$*" >> "$L/calls"; exit 0 ;; esac
 exec "$PWD/$T/bottler" "\$@"
 STUB
 cat > "$L/wine/bin/wine64" <<STUB
 #!/bin/bash
+echo "\$*" >> "$L/wine.calls"
 { echo "ARGS: \$*"; echo "CWD: \$PWD"; env | grep -E '^(WINEPREFIX|HOME|WINEDLLOVERRIDES|WINEMSYNC|GAME_MODE|DYLD_FALLBACK_LIBRARY_PATH)='; } > "$L/wine.log"
 exit "\${STUB_RC:-0}"
 STUB
@@ -315,17 +385,20 @@ cat > "$L/recipe/recipe.json" <<'JSON'
   "detect": { "required": ["Game.exe"], "fingerprint": "Game.exe" },
   "launch": {
     "variants": [ { "label": "Plain", "exe": "thinker.exe", "args": [] },
-                  { "label": "With args", "exe": "bin/thinker.exe", "args": ["-smac", "two words"] } ],
+                  { "label": "With args", "exe": "bin/thinker.exe", "args": ["-smac", "two words", "-w", "{w}", "-h", "{h}"] } ],
     "window": { "mode": "pillarbox:4:3", "align": 8, "backdrop": true, "menubar": "hide" },
     "ini": [ { "file": "thinker.ini", "section": "thinker", "set": { "window_width": "{w}", "window_height": "{h}" } } ],
     "env": { "GAME_MODE": "it's quoted" },
     "dllOverrides": { "ddraw": "n,b", "dinput": "b" } } }
 JSON
 export BOTTLER_TEST_SCREENS="0,0,1728,1117;0,0,1728,1084;32;0,0,1728,1117"
+# the menu bar marker lives outside the app: a rebuilt or deleted app must not strand
+# the menu bar hidden (it did, when a killed test run's app was rebuilt)
+STATE="$PWD/$T/state"; export BOTTLER_STATE="$STATE"
 rm -f "$L/calls"; bash "$L/bin/launch.sh" "$L" 1 main; rc=$?
 expect "launch exits with the game's code" "0" "$rc"
 expect "wine runs bottler-place with the rect and the variant's args" \
-    "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\bin\\thinker.exe -smac two words" \
+    "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\bin\\thinker.exe -smac two words -w 1440 -h 1080" \
     "$(grep '^ARGS:' "$L/wine.log")"
 expect "wine runs in the game's physical folder (C:\\Game, not a Z: path)" "CWD: $L/prefix/drive_c/Game" "$(grep '^CWD:' "$L/wine.log")"
 expect "per-launch INI values written" "$(printf '[thinker]\r\nwindow_width=1440\r\nwindow_height=1080\r\n')" "$(cat "$L/game/thinker.ini")"
@@ -333,15 +406,35 @@ expect "WINEPREFIX is the bundle's" "WINEPREFIX=$L/prefix" "$(grep '^WINEPREFIX=
 expect "HOME is inside the bundle" "HOME=$L/home" "$(grep '^HOME=' "$L/wine.log")"
 expect "DLL overrides from the recipe" "WINEDLLOVERRIDES=ddraw=n,b;dinput=b" "$(grep '^WINEDLLOVERRIDES=' "$L/wine.log")"
 expect "recipe env exported, quotes intact" "GAME_MODE=it's quoted" "$(grep '^GAME_MODE=' "$L/wine.log")"
-expect "menu bar: restored, hidden, frame started, restored at exit" \
-    "$(printf 'menubar restore %s\nmenubar hide %s\nframe main --wine %s\nmenubar restore %s' "$L/logs/menubar-restore" "$L/logs/menubar-restore" "$L" "$L/logs/menubar-restore")" \
+expect "desktop: snapshot taken, menu bar hidden, frame started, snapshot restored at exit" \
+    "$(printf 'desktop save %s\nmenubar hide\nframe main --wine %s\ndesktop restore %s' "$STATE/desktop.json" "$L" "$STATE/desktop.json")" \
     "$(cat "$L/calls")"
 rm -f "$L/calls"; STUB_RC=5 bash "$L/bin/launch.sh" "$L" 0 main; rc=$?
 expect "a failing game's exit code is passed on" "5" "$rc"
-expect "menu bar restored even when the game fails" "menubar restore $L/logs/menubar-restore" "$(tail -1 "$L/calls")"
+expect "desktop restored even when the game fails" "desktop restore $STATE/desktop.json" "$(tail -1 "$L/calls")"
 expect "variant without args" "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\thinker.exe" "$(grep '^ARGS:' "$L/wine.log")"
 rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
 if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
+# fullscreen: the game owns its window (no rect for bottler-place, which then never
+# moves it: moving an OpenGL window turned it black); registry values set per launch
+python3 - "$L/recipe/recipe.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["launch"]["window"] = {"mode": "fullscreen", "menubar": "hide"}
+d["launch"]["registry"] = [{"key": "HKCU\\Software\\Game\\Settings",
+                            "set": {"ScreenWidth": "dword:{w}", "ScreenHeight": "dword:{h}", "Windowed": "dword:0", "Name": "full {w}"}}]
+json.dump(d, open(sys.argv[1], "w"))
+PY
+if "$T/bottler" recipe-check "$L/recipe/recipe.json" >/dev/null; then ok; else bad "fullscreen mode and launch.registry pass recipe-check"; fi
+rm -f "$L/wine.calls"; bash "$L/bin/launch.sh" "$L" 1 main; rc=$?
+expect "fullscreen: bottler-place gets no rect, the args get the display below the notch" \
+    "ARGS: $L/bin/bottler-place.exe 0 0 0 0 -- C:\\Game\\bin\\thinker.exe -smac two words -w 1728 -h 1085" \
+    "$(grep '^ARGS:' "$L/wine.log")"
+expect "registry values are imported before the game starts, in one regedit call" \
+    "regedit /S C:\\bottler-launch.reg" "$(head -1 "$L/wine.calls")"
+expect "the .reg file holds the values with the geometry" \
+    "$(printf 'REGEDIT4\r\n\r\n[HKEY_CURRENT_USER\\Software\\Game\\Settings]\r\n"Name"="full 1728"\r\n"ScreenHeight"=dword:0000043d\r\n"ScreenWidth"=dword:000006c0\r\n"Windowed"=dword:00000000\r\n')" \
+    "$(cat "$L/prefix/drive_c/bottler-launch.reg" 2>/dev/null)"
 unset BOTTLER_TEST_SCREENS
 
 # --- projects: make project, and two projects built at the same time (no engine)
@@ -375,6 +468,43 @@ done
 echo "played" > "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/game/saves/slot.sav"
 if core/build-app.sh "$BOTTLER_PROJECTS/one" --no-engine > "$T/rebuild.log" 2>&1; then ok; else bad "rebuild exits 0"; fi
 expect "a rebuild keeps the app's saves" "played" "$(cat "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/game/saves/slot.sav" 2>/dev/null)"
+
+# a local recipe: a folder given instead of a name is copied into the project (never committed)
+LOCAL="$T/my-recipe"; cp -R tests/fixtures/recipe-min "$LOCAL"
+python3 - "$LOCAL/recipe.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["title"] = "Local Test"; d["install"]["registry"] = ["settings.reg"]
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+GL="$T/game-local"; mkdir -p "$GL"; cp "$GA/Game.exe" "$GL/"; printf 'Windows Registry Editor Version 5.00\r\n' > "$GL/settings.reg"
+if core/project.sh mine "$LOCAL" "$GL" >/dev/null; then ok; else bad "make project takes a recipe folder"; fi
+expect "a local recipe is recorded as local" "local" "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['recipe'])" "$BOTTLER_PROJECTS/mine/project.json" 2>/dev/null)"
+if [ -f "$BOTTLER_PROJECTS/mine/recipe/recipe.json" ]; then ok; else bad "the local recipe is copied into the project"; fi
+if core/build-app.sh "$BOTTLER_PROJECTS/mine" --no-engine > "$T/build-local.log" 2>&1 && [ -d "$BOTTLER_PROJECTS/mine/Local Test.app" ]; then ok; else bad "a project builds from its local recipe"; fi
+expect "recipe-field lists the registry files" "settings.reg" "$("$T/bottler" recipe-field "$BOTTLER_PROJECTS/mine/recipe/recipe.json" install.registry 2>&1)"
+rm "$GL/settings.reg"; mkdir -p "$T/gl-icons"
+"$T/bottler" install "$BOTTLER_PROJECTS/mine/recipe" "$GL" "$T/gl-game" "$T/gl-icons" >/dev/null 2>&1; rc=$?
+expect "a registry file missing from the game is refused" "3" "$rc"
+# a private recipe in recipes.local/ (git-ignored) is found by name, like a public one
+export BOTTLER_LOCAL_RECIPES="$PWD/$T/recipes.local"
+mkdir -p "$BOTTLER_LOCAL_RECIPES"; cp -R "$LOCAL" "$BOTTLER_LOCAL_RECIPES/private-one"
+if core/project.sh priv private-one "$GL" >/dev/null; then ok; else bad "make project finds a recipe in recipes.local"; fi
+if [ "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['recipe'])" "$BOTTLER_PROJECTS/priv/project.json" 2>/dev/null)" = "private-one" ] \
+   && [ ! -e "$BOTTLER_PROJECTS/priv/recipe" ]; then ok; else bad "a recipes.local recipe is used by name, not copied"; fi
+printf 'Windows Registry Editor Version 5.00\r\n' > "$GL/settings.reg"
+if core/build-app.sh "$BOTTLER_PROJECTS/priv" --no-engine > "$T/build-priv.log" 2>&1 && [ -d "$BOTTLER_PROJECTS/priv/Local Test.app" ]; then ok; else bad "a project builds from a recipes.local recipe"; fi
+if git check-ignore -q recipes.local/x/recipe.json; then ok; else bad "recipes.local/ is git-ignored"; fi
+unset BOTTLER_LOCAL_RECIPES
+# a project's own icon (projects/<name>/icon.*) replaces the one made from the exe,
+# for the app and inside the exe; changing it later re-patches the exe from its .bkp
+core/project.sh custom min "$GA" >/dev/null
+core/build-app.sh "$BOTTLER_PROJECTS/custom" --no-engine > "$T/build-custom1.log" 2>&1
+CG="$BOTTLER_PROJECTS/custom/Bottler Test.app/Contents/Resources/game"
+EXE1="$(md5 -q "$CG/Game.exe")"
+cp "$I/round.png" "$BOTTLER_PROJECTS/custom/icon.png"
+if core/build-app.sh "$BOTTLER_PROJECTS/custom" --no-engine > "$T/build-custom2.log" 2>&1; then ok; else bad "a project with icon.png builds"; fi
+expect "the project's icon is the app icon" "255 0 0 255" "$(rgb "$BOTTLER_PROJECTS/custom/Bottler Test.app/Contents/Resources/icon/icon_1024.png" 112 512 2>/dev/null)"
+if [ "$(md5 -q "$CG/Game.exe")" != "$EXE1" ] && [ "$(md5 -q "$CG/Game.exe.bkp")" = "$(md5 -q "$GA/Game.exe")" ]; then ok; else bad "a changed icon re-patches the exe from the stock .bkp"; fi
 unset BOTTLER_RECIPES BOTTLER_PROJECTS
 
 # --- dock-name on a fake CrossOver engine

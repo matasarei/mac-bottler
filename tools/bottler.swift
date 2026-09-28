@@ -3,7 +3,7 @@
 //
 //   bottler scan <dir>                       JSON report on a game folder's executables
 //   bottler hints <game name>                what Lutris' installer scripts know (hints only)
-//   bottler icon <exe> <out-dir>             rounded macOS icon from the exe's own icon
+//   bottler icon <exe|image> <out-dir>       rounded macOS icon from the exe's own icon (or an image file)
 //   bottler exe-icon <exe> <png-dir> <out>   put that icon into a copy of the exe, in place
 //   bottler displays                         JSON list of the connected displays
 //   bottler geometry <display|main> <mode> [align]
@@ -14,10 +14,11 @@
 //   bottler prepare-launch <Resources> <variant> <display|main>
 //                                            geometry + per-launch INI edits; prints
 //                                            shell variables for core/launch.sh
-//   bottler menubar hide|restore <marker>    auto-hide the menu bar while playing
+//   bottler menubar hide                     auto-hide the menu bar while playing
+//   bottler desktop save|restore <file>      the menu bar and Dock settings, recorded and put back
 //   bottler recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
 //   bottler recipe-field <recipe.json> <field>   one value for the build: title,
-//                                            bundleId, engine, proxy.dll
+//                                            bundleId, engine, proxy.dll, install.registry (one per line)
 //   bottler fetch <recipe-dir> <cache> <out> build time: pinned downloads into <out>
 //   bottler install <recipe-dir> <source> <game-dir> <icon-dir>
 //                                            copy the player's game and apply the recipe
@@ -496,16 +497,49 @@ func roundedIcon(_ src: CGImage, canvas: Int) -> CGImage {
         // holes, so it sits whole on a plate, at a whole-pixel scale
         ctx.setFillColor(CGColor(srgbRed: 170 / 255, green: 165 / 255, blue: 154 / 255, alpha: 1))
         ctx.fill(bodyRect)
-        let size = src.width * max(1, Int(Double(body) * 0.78 / Double(src.width)))
+        let target = Int(Double(body) * 0.78)
+        let size = src.width <= target ? src.width * (target / src.width) : target
+        if src.width > target { ctx.interpolationQuality = .high }   // a large image: scaled down
         let o = (canvas - size) / 2
         ctx.draw(src, in: CGRect(x: o, y: o, width: size, height: size))
     } else {
-        // a picture: it fills the body, cropped by a few pixels at most
+        // a picture: it fills the body, cropped by a few pixels at most; a large
+        // image (a finished icon from a file) is scaled down to the body instead
+        if src.width > body {
+            ctx.interpolationQuality = .high
+            ctx.draw(src, in: bodyRect)
+            return ctx.makeImage()!
+        }
         let big = src.width * max(1, Int((Double(body) / Double(src.width)).rounded(.up)))
         let crop = (big - body) / 2
         ctx.draw(src, in: CGRect(x: offset - crop, y: offset - crop, width: big, height: big))
     }
     return ctx.makeImage()!
+}
+
+/// The image cut to the square around what it draws (alpha >= 128), so transparent
+/// margins do not count: an icon already drawn as a rounded card for macOS then
+/// fills the body instead of going on a plate. Unchanged when there is no margin.
+func trimmedToSquare(_ img: CGImage) -> CGImage {
+    let w = img.width, h = img.height
+    let ctx = rgbaContext(w, h)
+    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let data = ctx.data else { return img }
+    let px = data.bindMemory(to: UInt8.self, capacity: ctx.bytesPerRow * h)
+    var minX = w, minY = h, maxX = -1, maxY = -1   // rows from the top
+    for row in 0..<h {
+        for x in 0..<w where px[row * ctx.bytesPerRow + x * 4 + 3] >= 128 {
+            minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, row); maxY = max(maxY, row)
+        }
+    }
+    guard maxX >= 0 else { return img }
+    let side = max(maxX - minX + 1, maxY - minY + 1)
+    guard side < max(w, h) else { return img }
+    let left = minX - (side - (maxX - minX + 1)) / 2, top = minY - (side - (maxY - minY + 1)) / 2
+    let out = rgbaContext(side, side)
+    out.interpolationQuality = .none
+    out.draw(img, in: CGRect(x: -left, y: side + top - h, width: w, height: h))
+    return out.makeImage() ?? img
 }
 
 /// The share of an image's pixels that are mostly transparent (alpha < 128).
@@ -577,9 +611,21 @@ func writePNG(_ img: CGImage, _ url: URL) throws {
     guard CGImageDestinationFinalize(dest) else { throw PEError(message: "cannot write \(url.path)") }
 }
 
+/// The icon art in `url`: an exe's (or DLL's, whatever its name: Game.exe.bkp) largest
+/// icon, or the largest image in an image file (.icns, .png, .ico, .jpg - a project's
+/// own icon).
+func iconSource(_ url: URL) throws -> CGImage {
+    let data = try Data(contentsOf: url)
+    if data.starts(with: [0x4D, 0x5A]) { return try largestIcon(try PEFile(data: data)) }   // "MZ": an exe or DLL
+    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw PEError(message: "cannot read \(url.path)") }
+    let images = (0..<CGImageSourceGetCount(src)).compactMap { CGImageSourceCreateImageAtIndex(src, $0, nil) }
+    guard let best = images.max(by: { $0.width < $1.width }) else { throw PEError(message: "no image in \(url.path)") }
+    return best
+}
+
 /// AppIcon.icns + icon_1024.png for the app, exe-icon-{256,48,32,16}.png for exe-icon.
 func makeIcons(exe: URL, out: URL) throws {
-    let src = try largestIcon(try PEFile(data: Data(contentsOf: exe)))
+    let src = trimmedToSquare(try iconSource(exe))
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
     let master = roundedIcon(src, canvas: 1024)
     try writePNG(master, out.appendingPathComponent("icon_1024.png"))
@@ -607,11 +653,13 @@ func makeIcons(exe: URL, out: URL) throws {
 
 struct RefusedError: Error { let message: String }
 
-/// Replace an exe's icons in place: the new PNG icons go into the existing block
-/// of RT_ICON data, the RT_ICON entries are re-pointed and the group is rewritten
-/// in its own slot. Nothing moves: a full resource rebuild (rcedit) broke a game
-/// with self-modifying code. Refuses unless everything fits, the size is unchanged
-/// and every changed byte is inside the resource section.
+/// Replace an exe's icons without moving anything: a full resource rebuild (rcedit)
+/// broke a game with self-modifying code. The new PNG icons go into the existing
+/// block of RT_ICON data; when they do not fit there and .rsrc is the file's last
+/// section (unsigned, nothing after it), they are appended at its end instead and
+/// only its size fields grow. The RT_ICON entries are re-pointed and the group is
+/// rewritten in its own slot. Refuses unless every changed byte is inside .rsrc (or,
+/// when growing, one of those size fields).
 func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     let original = try Data(contentsOf: exe)
     let pe = try PEFile(data: original)
@@ -630,19 +678,36 @@ func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     for r in all where r.type != rtIcon && r.rva < end && r.rva + r.size > start {
         throw RefusedError(message: "icon data is interleaved with other resources")
     }
-    // as many sizes as the slots and bytes allow: the largest first (the Dock shows
-    // it), then 32 px (window title bars), then the rest
-    var pngs: [(size: Int, data: Data)] = [], aligned = 0
-    for size in [256, 32, 48, 16] {
-        guard pngs.count < icons.count, let png = available.first(where: { $0.size == size }) else { continue }
-        let need = (png.data.count + 3) & ~3
-        if aligned + need <= Int(end - start) { pngs.append(png); aligned += need }
+    // Where the new icons go: in the old block when they fit; otherwise, when .rsrc is
+    // the file's last section (nothing after it, no signature), appended at its end,
+    // which moves nothing; otherwise as many sizes as fit in the old block.
+    let priority = [256, 32, 48, 16]   // the Dock shows the largest, title bars 32 px
+    func choose(room: Int?) -> [(size: Int, data: Data)] {
+        var chosen: [(size: Int, data: Data)] = [], used = 0
+        for size in priority {
+            guard chosen.count < icons.count, let png = available.first(where: { $0.size == size }) else { continue }
+            let need = (png.data.count + 3) & ~3
+            if room == nil || used + need <= room! { chosen.append(png); used += need }
+        }
+        return chosen.sorted { $0.size > $1.size }
     }
+    let secStart = Int(original.u32(0x3C)) + 24 + Int(original.u16(Int(original.u32(0x3C)) + 20))
+    let rsrcIndex = pe.sections.firstIndex { $0.name == ".rsrc" }
+    let canGrow: Bool = {
+        guard let k = rsrcIndex else { return false }
+        let r = pe.sections[k]
+        let last = pe.sections.allSatisfy { $0.rva <= r.rva && $0.rawOffset <= r.rawOffset }
+        let signed = pe.dataDirectories.count > 4 && pe.dataDirectories[4].rva != 0
+        return last && !signed && Int(r.rawOffset + r.rawSize) == original.count
+    }()
+    var pngs = choose(room: Int(end - start))
+    let ideal = choose(room: nil)
+    let grow = canGrow && ideal.map { $0.size } != pngs.map { $0.size }
+    if grow { pngs = ideal }
     guard !pngs.isEmpty else {
         let least = available.map { ($0.data.count + 3) & ~3 }.min()!
         throw RefusedError(message: "new icons need at least \(least) bytes, the icon block has \(end - start)")
     }
-    pngs.sort { $0.size > $1.size }
     if pngs.count < available.count {
         let kept = pngs.map { "\($0.size)" }.joined(separator: ", ")
         FileHandle.standardError.write("note: the exe has room for \(kept) px icons only\n".data(using: .utf8)!)
@@ -653,16 +718,42 @@ func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     }
 
     var d = original
-    d.replaceSubrange(blockOffset..<blockOffset + Int(end - start), with: Data(count: Int(end - start)))
-    var rva = start
-    var placed: [(size: Int, rva: UInt32, length: Int, id: UInt32)] = []
-    for (i, png) in pngs.enumerated() {
-        let o = blockOffset + Int(rva - start)
-        d.replaceSubrange(o..<o + png.data.count, with: png.data)
-        placed.append((png.size, rva, png.data.count, icons[i].id))
-        rva = (rva + UInt32(png.data.count) + 3) & ~3
-    }
     func put32(_ v: UInt32, _ o: Int) { withUnsafeBytes(of: v.littleEndian) { d.replaceSubrange(o..<o + 4, with: $0) } }
+    var placed: [(size: Int, rva: UInt32, length: Int, id: UInt32)] = []
+    var headerFields: [Range<Int>] = []   // header bytes growing is allowed to change
+    if grow, let k = rsrcIndex {
+        let r = pe.sections[k]
+        // new data from the end of what the section maps (raw or virtual, whichever is
+        // larger), so RVA and file offset keep the section's fixed relation
+        let from = (Int(max(r.virtualSize, r.rawSize)) + 3) & ~3
+        d.append(Data(count: from - Int(r.rawSize)))
+        for (i, png) in pngs.enumerated() {
+            placed.append((png.size, r.rva + UInt32(d.count - Int(r.rawOffset)), png.data.count, icons[i].id))
+            d.append(png.data); d.append(Data(count: (4 - png.data.count % 4) % 4))
+        }
+        let opt = Int(original.u32(0x3C)) + 24
+        let fileAlign = Int(original.u32(opt + 36)), sectAlign = Int(original.u32(opt + 32))
+        let virtualSize = d.count - Int(r.rawOffset)
+        d.append(Data(count: (fileAlign - d.count % fileAlign) % fileAlign))
+        let header = secStart + 40 * k
+        put32(UInt32(virtualSize), header + 8)                       // VirtualSize
+        put32(UInt32(d.count - Int(r.rawOffset)), header + 16)       // SizeOfRawData
+        let image = (Int(r.rva) + virtualSize + sectAlign - 1) / sectAlign * sectAlign
+        put32(UInt32(max(Int(original.u32(opt + 56)), image)), opt + 56)   // SizeOfImage
+        let dirs = opt + (pe.is64 ? 112 : 96)
+        let resDir = pe.dataDirectories[2]
+        put32(UInt32(Int(r.rva) + virtualSize) - resDir.rva, dirs + 2 * 8 + 4)   // resource directory size
+        headerFields = [header + 8..<header + 12, header + 16..<header + 20, opt + 56..<opt + 60, dirs + 20..<dirs + 24]
+    } else {
+        d.replaceSubrange(blockOffset..<blockOffset + Int(end - start), with: Data(count: Int(end - start)))
+        var rva = start
+        for (i, png) in pngs.enumerated() {
+            let o = blockOffset + Int(rva - start)
+            d.replaceSubrange(o..<o + png.data.count, with: png.data)
+            placed.append((png.size, rva, png.data.count, icons[i].id))
+            rva = (rva + UInt32(png.data.count) + 3) & ~3
+        }
+    }
     for (i, icon) in icons.enumerated() {
         let p = placed[min(i, placed.count - 1)]   // spare slots point at the smallest icon
         put32(p.rva, icon.entryOffset); put32(UInt32(p.length), icon.entryOffset + 4)
@@ -678,8 +769,8 @@ func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     d.replaceSubrange(groupOffset..<groupOffset + groupSize, with: g + Data(count: groupSize - g.count))
     put32(UInt32(g.count), group.group.entryOffset + 4)
 
-    guard d.count == original.count else { throw RefusedError(message: "size changed") }
-    for i in 0..<d.count where d[i] != original[i] && !rsrcRange.contains(i) {
+    guard grow || d.count == original.count else { throw RefusedError(message: "size changed") }
+    for i in 0..<original.count where d[i] != original[i] && !rsrcRange.contains(i) && !headerFields.contains(where: { $0.contains(i) }) {
         throw RefusedError(message: String(format: "byte 0x%x outside .rsrc would change", i))
     }
     try d.write(to: out, options: .atomic)
@@ -696,13 +787,16 @@ struct Screen {
     var frame: CGRect
     var visible: CGRect
     var safeTop: CGFloat      // the notch; the menu bar is not counted (it auto-hides)
+    var modes: [CGSize] = []  // the display's modes in points (fullscreen picks one)
 }
 
 func connectedScreens() -> [Screen] {
     NSScreen.screens.map { s in
         let id = (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        let modes = (CGDisplayCopyAllDisplayModes(id, nil) as? [CGDisplayMode] ?? [])
+            .map { CGSize(width: $0.width, height: $0.height) }
         return Screen(id: id, name: s.localizedName, frame: s.frame, visible: s.visibleFrame,
-                      safeTop: s.safeAreaInsets.top)
+                      safeTop: s.safeAreaInsets.top, modes: modes)
     }
 }
 
@@ -710,10 +804,18 @@ func connectedScreens() -> [Screen] {
 /// the primary display, y down) for `screen`, where `primary` is NSScreen.screens[0].
 ///   mode "native": the whole usable area; "pillarbox:<w>:<h>": the largest area of
 ///   that aspect ratio, centred. Both sides are rounded down to a multiple of `align`.
+///   "fullscreen": the display's full width by the height below the notch, snapped
+///   to the tallest display mode that fits (1728x1080 on a 14" MacBook Pro): the size
+///   a game switching to full screen should ask for, so the scale stays the same.
 /// Usable area: the display minus the notch and a visible Dock; the menu bar is
 /// ignored because the launcher auto-hides it while the game runs.
 func gameRect(screen: Screen, primary: Screen, mode: String, align: Int) throws -> (x: Int, y: Int, w: Int, h: Int) {
     let f = screen.frame, v = screen.visible
+    if mode == "fullscreen" {
+        let w = Int(f.width), limit = Int(f.height - screen.safeTop)
+        let h = screen.modes.filter { Int($0.width) == w && Int($0.height) <= limit }.map { Int($0.height) }.max() ?? limit
+        return (Int(f.minX - primary.frame.minX), Int(primary.frame.maxY - f.maxY), w, h)
+    }
     // Dock insets: where the visible frame is smaller than the frame on left, right, bottom
     let left = v.minX - f.minX, right = f.maxX - v.maxX, bottom = v.minY - f.minY
     let area = CGRect(x: f.minX + left, y: f.minY + bottom,
@@ -731,7 +833,7 @@ func gameRect(screen: Screen, primary: Screen, mode: String, align: Int) throws 
             h = w * rh / rw / a * a
         }
     } else if mode != "native" {
-        throw PEError(message: "unknown mode \(mode) (native | pillarbox:<w>:<h>)")
+        throw PEError(message: "unknown mode \(mode) (native | fullscreen | pillarbox:<w>:<h>)")
     }
     // centre in the usable area, then flip to Win32 coordinates
     let cocoaX = area.minX + (area.width - CGFloat(w)) / 2
@@ -854,34 +956,82 @@ final class FrameKeeper: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - menu bar
+// MARK: - menu bar and Dock
 
-/// The global "automatically hide the menu bar" preference, set for the session.
-/// hide: turns it on unless the user already has it on, leaving a marker file;
-/// restore: turns it off again only if the marker exists, then deletes it. A marker
-/// left by a crashed run is restored by the next run's restore.
-func menubar(_ action: String, marker: String) throws {
-    let key = "_HIHideMenuBar" as CFString
-    let current = CFPreferencesCopyValue(key, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser,
-                                         kCFPreferencesAnyHost) as? Bool ?? false
-    let fm = FileManager.default
-    switch action {
-    case "hide":
-        guard !current else { return }
-        fm.createFile(atPath: marker, contents: Data())
-        CFPreferencesSetValue(key, kCFBooleanTrue, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
-    case "restore":
-        guard fm.fileExists(atPath: marker) else { return }
-        CFPreferencesSetValue(key, nil, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
-        try fm.removeItem(atPath: marker)
-    default:
-        throw PEError(message: "menubar hide|restore <marker>")
+/// The preference domains the desktop settings live in. BOTTLER_TEST_PREFS=<id>
+/// swaps them for <id>.global and <id>.dock, so tests never touch the player's own.
+func prefDomains() -> (global: CFString, dock: CFString, test: Bool) {
+    if let t = ProcessInfo.processInfo.environment["BOTTLER_TEST_PREFS"], !t.isEmpty {
+        return ("\(t).global" as CFString, "\(t).dock" as CFString, true)
     }
-    CFPreferencesSynchronize(kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    return (kCFPreferencesAnyApplication, "com.apple.dock" as CFString, false)
+}
+
+private let menubarKey = "_HIHideMenuBar" as CFString, dockKey = "autohide" as CFString
+
+func readPref(_ key: CFString, _ domain: CFString) -> Bool? {
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    return CFPreferencesCopyValue(key, domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? Bool
+}
+
+func writePref(_ key: CFString, _ value: Bool?, _ domain: CFString) {
+    CFPreferencesSetValue(key, value.map { $0 ? kCFBooleanTrue : kCFBooleanFalse }, domain,
+                          kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+}
+
+/// Tell the running system the menu bar setting changed, and let the screens settle.
+func announceMenubar() {
     DistributedNotificationCenter.default().postNotificationName(
         NSNotification.Name("AppleInterfaceMenuBarHidingChangedNotification"), object: nil, userInfo: nil,
         deliverImmediately: true)
-    Thread.sleep(forTimeInterval: 0.5)   // let the screens' usable area settle
+    Thread.sleep(forTimeInterval: 0.5)
+}
+
+/// menubar hide: turn on "automatically hide the menu bar" for the game's session.
+/// What to go back to is `desktop`'s job.
+func menubar(_ action: String) throws {
+    guard action == "hide" else { throw PEError(message: "menubar hide") }
+    let d = prefDomains()
+    writePref(menubarKey, true, d.global)
+    if !d.test { announceMenubar() }
+}
+
+/// desktop save <file>: record how the menu bar and Dock are set (auto-hide or not)
+/// before a game runs. A snapshot that is already there was left by a run that never
+/// restored (a crash, a killed launch, a rebuilt app): it holds the player's real
+/// settings, so it is kept, not overwritten.
+/// desktop restore <file>: put both back as recorded, then delete the snapshot. The
+/// Dock is restarted only when its setting actually changes.
+func desktop(_ action: String, file: URL) throws {
+    let d = prefDomains(), fm = FileManager.default
+    switch action {
+    case "save":
+        guard !fm.fileExists(atPath: file.path) else { return }
+        var snap: [String: Any] = [:]
+        if let m = readPref(menubarKey, d.global) { snap["menubarAutohide"] = m }
+        if let a = readPref(dockKey, d.dock) { snap["dockAutohide"] = a }
+        try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: snap).write(to: file, options: .atomic)
+    case "restore":
+        guard fm.fileExists(atPath: file.path) else { return }
+        let snap = (try JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any] ?? [:]
+        let menubarWas = snap["menubarAutohide"] as? Bool, dockWas = snap["dockAutohide"] as? Bool
+        if readPref(menubarKey, d.global) != menubarWas {
+            writePref(menubarKey, menubarWas, d.global)
+            if !d.test { announceMenubar() }
+        }
+        if readPref(dockKey, d.dock) != dockWas {
+            writePref(dockKey, dockWas, d.dock)
+            if !d.test {   // the Dock reads its settings when it starts
+                let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/killall"); p.arguments = ["Dock"]
+                try? p.run(); p.waitUntilExit()
+            }
+        }
+        try fm.removeItem(at: file)
+    default:
+        throw PEError(message: "desktop save|restore <file>")
+    }
 }
 
 
@@ -892,11 +1042,11 @@ let recipeKeys: [String: Set<String>] = [
     "": ["schema", "title", "bundleId", "engine", "detect", "install", "launch"],
     "detect": ["required", "fingerprint", "builds", "unknown"],
     "detect.builds.*": ["status", "label", "message"],
-    "install": ["exclude", "rename", "downloads", "ini", "proxy", "appIcon", "exeIcon"],
+    "install": ["exclude", "rename", "downloads", "ini", "proxy", "appIcon", "exeIcon", "registry"],
     "install.downloads[]": ["url", "sha256", "files"],
     "install.ini[]": ["file", "section", "set"],
     "install.proxy": ["dll"],
-    "launch": ["variants", "window", "ini", "env", "dllOverrides"],
+    "launch": ["variants", "window", "ini", "registry", "env", "dllOverrides"],
     "launch.variants[]": ["label", "exe", "args"],
     "launch.window": ["mode", "align", "backdrop", "menubar", "title"],
     "launch.ini[]": ["file", "section", "set"],
@@ -917,13 +1067,15 @@ struct Recipe: Codable {
     struct Install: Codable {
         var exclude: [String]?; var rename: [String: String]?; var downloads: [Download]?
         var ini: [IniEdit]?; var proxy: Proxy?; var appIcon: String?; var exeIcon: String?
+        var registry: [String]?
     }
     struct Variant: Codable { var label: String; var exe: String; var args: [String]? }
     struct Window: Codable {
         var mode: String; var align: Int?; var backdrop: Bool?; var menubar: String?; var title: String?
     }
+    struct RegistryEdit: Codable { var key: String; var set: [String: String] }
     struct Launch: Codable {
-        var variants: [Variant]; var window: Window; var ini: [IniEdit]?
+        var variants: [Variant]; var window: Window; var ini: [IniEdit]?; var registry: [RegistryEdit]?
         var env: [String: String]?; var dllOverrides: [String: String]?
     }
     var schema: Int; var title: String; var bundleId: String; var engine: String
@@ -986,10 +1138,19 @@ func checkRecipe(_ url: URL) -> [String] {
     if recipe.launch.variants.isEmpty { errors.append("launch.variants is empty") }
     for v in recipe.launch.variants where !isSafeRelative(v.exe) { errors.append("variant exe is not relative: \(v.exe)") }
     let mode = recipe.launch.window.mode
-    if mode != "native" {
+    if mode != "native" && mode != "fullscreen" {
         let p = mode.split(separator: ":")
         if !(p.count == 3 && p[0] == "pillarbox" && Int(p[1]) ?? 0 > 0 && Int(p[2]) ?? 0 > 0) {
-            errors.append("launch.window.mode must be native or pillarbox:<w>:<h>: \(mode)")
+            errors.append("launch.window.mode must be native, fullscreen or pillarbox:<w>:<h>: \(mode)")
+        }
+    }
+    for edit in recipe.launch.registry ?? [] {
+        if !(edit.key.hasPrefix("HKCU\\") || edit.key.hasPrefix("HKLM\\")) {
+            errors.append("launch.registry key must start with HKCU\\ or HKLM\\: \(edit.key)")
+        }
+        for (name, value) in edit.set where value.hasPrefix("dword:") && Int(value.dropFirst(6)) == nil
+            && !value.contains("{") {
+            errors.append("launch.registry \(name): dword:<decimal number or {w} {h} {x} {y}>, got \(value)")
         }
     }
     if let m = recipe.launch.window.menubar, !["hide", "keep"].contains(m) { errors.append("launch.window.menubar must be hide or keep") }
@@ -1126,6 +1287,10 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
     for r in recipe.detect.required where !fm.fileExists(atPath: source.appendingPathComponent(r).path) {
         throw InstallRefused(message: "\(r) is missing: this does not look like a \(recipe.title) folder")
     }
+    // the build imports these into the prefix after install (core/build-app.sh)
+    for r in recipe.install?.registry ?? [] where !fm.fileExists(atPath: source.appendingPathComponent(r).path) {
+        throw InstallRefused(message: "\(r) (install.registry) is missing from the game folder")
+    }
     let fingerprint = md5(try Data(contentsOf: source.appendingPathComponent(recipe.detect.fingerprint)))
     let build = recipe.detect.builds?[fingerprint]
     switch build?.status {
@@ -1243,26 +1408,40 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
         }
     }
 
-    // 7. icons: the app icon, and the same icon inside the running exe (for the Dock)
-    if let from = recipe.install?.appIcon {
-        let icns = iconDir.appendingPathComponent("AppIcon.icns")
-        if !fm.fileExists(atPath: icns.path) {
+    // 7. icons: the app icon, and the same icon inside the running exe (for the Dock).
+    // A project's own icon (the build copies projects/<name>/icon.* in as
+    // project-icon.*) wins over the one made from the recipe's appIcon exe.
+    let icns = iconDir.appendingPathComponent("AppIcon.icns")
+    let projectIcon = (try? fm.contentsOfDirectory(at: recipeDir, includingPropertiesForKeys: nil))?
+        .first { $0.deletingPathExtension().lastPathComponent == "project-icon" }
+    if !fm.fileExists(atPath: icns.path) {
+        if let custom = projectIcon {
+            try makeIcons(exe: custom, out: iconDir); note("made the app icon from the project's \(custom.lastPathComponent)")
+        } else if let from = recipe.install?.appIcon {
             // the stock exe, when exeIcon has already put the made icon into it
             let stock = game.appendingPathComponent(from + ".bkp")
             let exe = fm.fileExists(atPath: stock.path) ? stock : game.appendingPathComponent(from)
             try makeIcons(exe: exe, out: iconDir); note("made the app icon from \(from)")
         }
     }
-    if let target = recipe.install?.exeIcon {
+    if let target = recipe.install?.exeIcon, fm.fileExists(atPath: icns.path) {
+        // always from the stock copy, so a changed icon reaches the exe too
         let exe = game.appendingPathComponent(target), bkp = game.appendingPathComponent(target + ".bkp")
-        if !fm.fileExists(atPath: bkp.path) {
-            try fm.copyItem(at: exe, to: bkp)
-            do {
-                try patchExeIcon(exe: bkp, pngDir: iconDir, out: exe); note("put the icon into \(target) (stock kept as \(target).bkp)")
-            } catch let e as RefusedError {
-                try? fm.removeItem(at: bkp)   // so a later install (a fixed tool) tries again
-                print("warning: \(target) keeps its own icon: \(e.message)")
+        let fresh = !fm.fileExists(atPath: bkp.path)
+        if fresh { try fm.copyItem(at: exe, to: bkp) }
+        let before = try Data(contentsOf: exe)
+        do {
+            let patched = iconDir.appendingPathComponent("patched.exe")
+            try patchExeIcon(exe: bkp, pngDir: iconDir, out: patched)
+            if try Data(contentsOf: patched) != before {
+                _ = try fm.replaceItemAt(exe, withItemAt: patched)
+                note("put the icon into \(target) (stock kept as \(target).bkp)")
+            } else {
+                try fm.removeItem(at: patched)
             }
+        } catch let e as RefusedError {
+            if fresh { try? fm.removeItem(at: bkp) }   // so a later install (a fixed tool) tries again
+            print("warning: \(target) keeps its own icon: \(e.message)")
         }
     }
 
@@ -1282,7 +1461,7 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
 func shq(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
 /// Resolve the recipe's launch for one variant on one display: compute the window
-/// rect, apply the per-launch INI edits ({x} {y} {w} {h}), and return shell
+/// rect, apply the per-launch INI edits and args ({x} {y} {w} {h}), and return shell
 /// variable assignments for core/launch.sh. BOTTLER_TEST_SCREENS="frame;visible;safeTop;primary"
 /// replaces the real displays (tests).
 func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
@@ -1303,19 +1482,42 @@ func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
     }
     let r = try gameRect(screen: screen, primary: primary, mode: w.mode, align: w.align ?? 1)
     let game = res.appendingPathComponent("game")
-    for edit in recipe.launch.ini ?? [] {
-        var values: [String: String] = [:]
-        for (k, val) in edit.set {
-            values[k] = val.replacingOccurrences(of: "{x}", with: "\(r.x)").replacingOccurrences(of: "{y}", with: "\(r.y)")
-                .replacingOccurrences(of: "{w}", with: "\(r.w)").replacingOccurrences(of: "{h}", with: "\(r.h)")
-        }
-        try iniSet(game.appendingPathComponent(edit.file), section: edit.section, values)
+    func geometry(_ s: String) -> String {
+        s.replacingOccurrences(of: "{x}", with: "\(r.x)").replacingOccurrences(of: "{y}", with: "\(r.y)")
+            .replacingOccurrences(of: "{w}", with: "\(r.w)").replacingOccurrences(of: "{h}", with: "\(r.h)")
     }
+    for edit in recipe.launch.ini ?? [] {
+        try iniSet(game.appendingPathComponent(edit.file), section: edit.section, edit.set.mapValues(geometry))
+    }
+    // registry values for this launch, as one .reg file on drive C: that launch.sh imports
+    var regFile = ""
+    if let edits = recipe.launch.registry, !edits.isEmpty {
+        var reg = "REGEDIT4\r\n"
+        for edit in edits {
+            let key = edit.key.replacingOccurrences(of: "HKCU\\", with: "HKEY_CURRENT_USER\\")
+                .replacingOccurrences(of: "HKLM\\", with: "HKEY_LOCAL_MACHINE\\")
+            reg += "\r\n[\(key)]\r\n"
+            for (name, raw) in edit.set.sorted(by: { $0.key < $1.key }) {
+                let value = geometry(raw)
+                if value.hasPrefix("dword:"), let n = UInt32(value.dropFirst(6)) {
+                    reg += "\"\(name)\"=dword:" + String(format: "%08x", n) + "\r\n"
+                } else {
+                    let escaped = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                    reg += "\"\(name)\"=\"\(escaped)\"\r\n"
+                }
+            }
+        }
+        try reg.write(to: res.appendingPathComponent("prefix/drive_c/bottler-launch.reg"), atomically: true, encoding: .utf8)
+        regFile = "C:\\bottler-launch.reg"
+    }
+    // fullscreen: the game owns its window, so bottler-place gets no rect and never moves it
+    let place = w.mode == "fullscreen" ? (x: 0, y: 0, w: 0, h: 0) : r
     let overrides = (recipe.launch.dllOverrides ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
     var out = [
-        "GX=\(r.x)", "GY=\(r.y)", "GW=\(r.w)", "GH=\(r.h)",
+        "GX=\(place.x)", "GY=\(place.y)", "GW=\(place.w)", "GH=\(place.h)",
+        "REG_FILE=" + shq(regFile),
         "GAME_EXE=" + shq("C:\\Game\\" + v.exe.replacingOccurrences(of: "/", with: "\\")),
-        "GAME_ARGS=(" + (v.args ?? []).map(shq).joined(separator: " ") + ")",
+        "GAME_ARGS=(" + (v.args ?? []).map { shq(geometry($0)) }.joined(separator: " ") + ")",
         "WIN_TITLE=" + shq(w.title ?? ""),
         "BACKDROP=" + ((w.backdrop ?? false) ? "1" : "0"),
         "MENUBAR=" + shq(w.menubar ?? "keep"),
@@ -1571,7 +1773,7 @@ case "scan":
         fail("bottler scan: \(error)")
     }
 case "icon":
-    guard args.count == 4 else { fail("usage: bottler icon <exe> <out-dir>") }
+    guard args.count == 4 else { fail("usage: bottler icon <exe|image> <out-dir>") }
     do { try makeIcons(exe: URL(fileURLWithPath: args[2]), out: URL(fileURLWithPath: args[3])) }
     catch { fail("bottler icon: \(error)") }
 case "exe-icon":
@@ -1631,8 +1833,11 @@ case "frame":
         app.run()
     } catch { fail("bottler frame: \(error)") }
 case "menubar":
-    guard args.count == 4 else { fail("usage: bottler menubar hide|restore <marker>") }
-    do { try menubar(args[2], marker: args[3]) } catch { fail("bottler menubar: \(error)") }
+    guard args.count == 3 else { fail("usage: bottler menubar hide") }
+    do { try menubar(args[2]) } catch { fail("bottler menubar: \(error)") }
+case "desktop":
+    guard args.count == 4 else { fail("usage: bottler desktop save|restore <file>") }
+    do { try desktop(args[2], file: URL(fileURLWithPath: args[3])) } catch { fail("bottler desktop: \(error)") }
 case "prepare-launch":
     guard args.count == 5, let variant = Int(args[3]) else { fail("usage: bottler prepare-launch <Resources> <variant> <display|main>") }
     do { print(try prepareLaunch(res: URL(fileURLWithPath: args[2]), variant: variant, display: args[4])) }
@@ -1646,6 +1851,7 @@ case "recipe-field":
         case "bundleId": print(r.bundleId)
         case "engine": print(r.engine)
         case "proxy.dll": print(r.install?.proxy?.dll ?? "")
+        case "install.registry": for f in r.install?.registry ?? [] { print(f) }
         default: fail("bottler recipe-field: unknown field \(args[3])")
         }
     } catch { fail("bottler recipe-field: \(error)") }

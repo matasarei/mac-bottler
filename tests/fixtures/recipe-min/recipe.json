@@ -4,7 +4,7 @@
   "bundleId": "com.matasarei.bottler.test",
   "engine": "crossover-23",
   "detect": { "required": ["Game.exe"], "fingerprint": "Game.exe", "unknown": "warn" },
-  "install": { "appIcon": "Game.exe" },
+  "install": { "appIcon": "Game.exe", "exeIcon": "Game.exe" },
   "launch": {
     "variants": [ { "label": "Play", "exe": "Game.exe" } ],
     "window": { "mode": "native" }

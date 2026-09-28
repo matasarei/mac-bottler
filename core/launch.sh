@@ -8,6 +8,10 @@
 set -uo pipefail
 RES="$(cd "$1" && pwd)"; VARIANT="${2:-0}"; DISPLAY_ID="${3:-main}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# per-user state outside every app (wine-env.sh moves HOME into the bundle): a
+# rebuilt or deleted app must not strand the menu bar hidden
+STATE="${BOTTLER_STATE:-$HOME/Library/Application Support/mac-bottler}"   # BOTTLER_STATE: tests
+mkdir -p "$STATE"
 # shellcheck source=core/wine-env.sh
 source "$HERE/wine-env.sh"
 KITCHEN="$RES/bin/bottler"
@@ -17,18 +21,22 @@ LOG="$RES/logs/last-launch.log"
 
 PLAN="$("$KITCHEN" prepare-launch "$RES" "$VARIANT" "$DISPLAY_ID" 2>>"$LOG")" \
     || { echo "cannot prepare the launch, see $LOG" >&2; exit 2; }
-# sets GX GY GW GH GAME_EXE GAME_ARGS WIN_TITLE BACKDROP MENUBAR RECIPE_OVERRIDES, exports the recipe's env
+# sets GX GY GW GH REG_FILE GAME_EXE GAME_ARGS WIN_TITLE BACKDROP MENUBAR RECIPE_OVERRIDES, exports the recipe's env
 eval "$PLAN"
+# the recipe's per-launch registry values (bottler prepare-launch wrote them to drive C:)
+[ -n "$REG_FILE" ] && "$WINE" regedit /S "$REG_FILE" >>"$LOG" 2>&1
 
-MARKER="$RES/logs/menubar-restore"
+# the menu bar and Dock as the player has them, put back however the game ends (a
+# snapshot a crashed run left behind is kept: it holds the real settings)
+SNAPSHOT="$STATE/desktop.json"
 FRAME_PID=""
 restore() {
     [ -n "$FRAME_PID" ] && kill "$FRAME_PID" 2>/dev/null
-    "$KITCHEN" menubar restore "$MARKER" >>"$LOG" 2>&1
+    "$KITCHEN" desktop restore "$SNAPSHOT" >>"$LOG" 2>&1
 }
 trap restore EXIT
-"$KITCHEN" menubar restore "$MARKER" >>"$LOG" 2>&1   # a crashed run may have left it hidden
-[ "$MENUBAR" = hide ] && "$KITCHEN" menubar hide "$MARKER" >>"$LOG" 2>&1
+"$KITCHEN" desktop save "$SNAPSHOT" >>"$LOG" 2>&1
+[ "$MENUBAR" = hide ] && "$KITCHEN" menubar hide >>"$LOG" 2>&1
 [ -n "$RECIPE_OVERRIDES" ] && export WINEDLLOVERRIDES="$RECIPE_OVERRIDES"
 if [ "$BACKDROP" = 1 ]; then
     "$KITCHEN" frame "$DISPLAY_ID" --wine "$RES" >>"$LOG" 2>&1 &

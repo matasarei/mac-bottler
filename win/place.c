@@ -10,7 +10,9 @@
  * launcher (a different process) is found the same way. A window of another
  * size is centred on the rect. Re-applied every 250 ms, because some games move
  * their window back (Thinker does after a movie). Exits when the window is gone
- * after having been seen, or if none appears within 3 minutes.
+ * after having been seen, or if none appears within 3 minutes. A rect of size 0
+ * (a full-screen game, which owns its window) starts the game and never moves it:
+ * moving an OpenGL game's window turned its picture black.
  *
  * Build: i686-w64-mingw32-gcc -O2 -mwindows -o bottler-place.exe place.c
  */
@@ -18,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "cmdline.h"
 
 struct search { const char *title; HWND best; long long area; };
 
@@ -64,14 +67,10 @@ int main(int argc, char **argv)
     }
     int x = atoi(argv[1]), y = atoi(argv[2]), w = atoi(argv[3]), h = atoi(argv[4]);
 
-    /* the game's command line: exe and args, each quoted */
+    /* the game's command line: exe and args, quoted only where needed */
     char cmd[4096] = "";
-    for (i = sep + 1; i < argc; i++) {
-        if (strlen(cmd) + strlen(argv[i]) + 4 >= sizeof(cmd)) return 2;
-        strcat(cmd, i > sep + 1 ? " \"" : "\"");
-        strcat(cmd, argv[i]);
-        strcat(cmd, "\"");
-    }
+    for (i = sep + 1; i < argc; i++)
+        if (append_arg(cmd, sizeof(cmd), argv[i])) return 2;
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
     if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
@@ -87,7 +86,7 @@ int main(int argc, char **argv)
         EnumWindows(consider, (LPARAM)&s);
         if (s.best) {
             seen = TRUE;
-            place(s.best, x, y, w, h);
+            if (w > 0 && h > 0) place(s.best, x, y, w, h);
         } else if (seen || waited > 180000) {
             break;
         }
