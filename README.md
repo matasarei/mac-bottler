@@ -1,5 +1,12 @@
 # mac-bottler
 
+[![CI](https://github.com/matasarei/mac-bottler/actions/workflows/ci.yml/badge.svg)](https://github.com/matasarei/mac-bottler/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/matasarei/mac-bottler)](LICENSE)
+[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](#requirements)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-black?logo=apple)](#requirements)
+[![Swift](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)](tools/bottler.swift)
+[![Wine](https://img.shields.io/badge/Wine-CrossOver%2023-8A1538?logo=wine&logoColor=white)](docs/THIRD-PARTY.md)
+
 Build a native-feeling macOS app for a Windows game, on your own Mac, from a small
 per-game **recipe**. Each app is self-contained: a pinned Wine runtime, its own
 prefix, the game installed from **your own copy**, and a tiny launcher (game
@@ -12,8 +19,13 @@ No game files and no game artwork are ever part of this repository or of a built
 app before you install your game into it. The app icon is generated at install
 time from your game's own executable.
 
-> Status: early. The first recipe is **Sid Meier's Alpha Centauri**; Nox and
-> Counter-Strike 1.6 follow. See `.tasks/` for the plan in progress.
+> Status: early. Recipes: **Sid Meier's Alpha Centauri** (Steam) and **Nox** (GOG).
+> Your own recipes for copies that should not be public go in `recipes.local/`.
+
+Inspired by [wow-launcher](https://github.com/matasarei/wow-launcher), a dedicated
+native macOS launcher for classic World of Warcraft on Apple Silicon. mac-bottler
+takes the same approach (a pinned Wine runtime, fixes baked in, one self-contained
+app) and turns it into a kitchen that bottles any game from a recipe.
 
 ## Requirements
 
@@ -57,6 +69,11 @@ picks or drafts a recipe, builds the app, launches and observes it, and fixes wh
 it finds, asking you only about sound and feel. In Claude Code that is
 `/cook "/path/to/your/game folder"`; any other agent follows
 `.claude/skills/cook/SKILL.md`.
+
+No AI subscription? [OpenCode](https://opencode.ai) with an open model works too:
+the skills are plain markdown, and a local ~30B coding model (Qwen3 Coder 30B, for
+example) can follow them. [opencode-skills](https://github.com/matasarei/opencode-skills)
+is a ready set of OpenCode skills tuned for such local models.
 
 ## Layout
 
