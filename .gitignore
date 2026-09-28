@@ -1,6 +1,8 @@
 build/
 # local projects: your game's path and apps with the game inside; never committed
 projects/
+# your private recipes (for a copy of a game the public recipes should not carry)
+recipes.local/
 .DS_Store
 
 # local agent/task state; the shared skills in .claude/skills/ are committed

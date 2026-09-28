@@ -17,6 +17,8 @@ WORK="$PROJ/.build"; CACHE="$ROOT/build/cache"
 mkdir -p "$WORK" "$CACHE" "$PROJ/logs"
 field() { python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "$PROJ/project.json" "$1"; }
 RECIPE="${BOTTLER_RECIPES:-$ROOT/recipes}/$(field recipe)"   # BOTTLER_RECIPES: tests
+PRIVATE="${BOTTLER_LOCAL_RECIPES:-$ROOT/recipes.local}/$(field recipe)"   # your own recipes, git-ignored
+if [ ! -f "$RECIPE/recipe.json" ] && [ -f "$PRIVATE/recipe.json" ]; then RECIPE="$PRIVATE"; fi
 if [ "$(field recipe)" = local ]; then RECIPE="$PROJ/recipe"; fi   # a project's own recipe
 GAME_SRC="$(field game)"
 [ -f "$RECIPE/recipe.json" ] || { echo "ERROR: no recipe at $RECIPE"; exit 2; }

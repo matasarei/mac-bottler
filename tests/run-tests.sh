@@ -485,6 +485,16 @@ expect "recipe-field lists the registry files" "settings.reg" "$("$T/bottler" re
 rm "$GL/settings.reg"; mkdir -p "$T/gl-icons"
 "$T/bottler" install "$BOTTLER_PROJECTS/mine/recipe" "$GL" "$T/gl-game" "$T/gl-icons" >/dev/null 2>&1; rc=$?
 expect "a registry file missing from the game is refused" "3" "$rc"
+# a private recipe in recipes.local/ (git-ignored) is found by name, like a public one
+export BOTTLER_LOCAL_RECIPES="$PWD/$T/recipes.local"
+mkdir -p "$BOTTLER_LOCAL_RECIPES"; cp -R "$LOCAL" "$BOTTLER_LOCAL_RECIPES/private-one"
+if core/project.sh priv private-one "$GL" >/dev/null; then ok; else bad "make project finds a recipe in recipes.local"; fi
+if [ "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['recipe'])" "$BOTTLER_PROJECTS/priv/project.json" 2>/dev/null)" = "private-one" ] \
+   && [ ! -e "$BOTTLER_PROJECTS/priv/recipe" ]; then ok; else bad "a recipes.local recipe is used by name, not copied"; fi
+printf 'Windows Registry Editor Version 5.00\r\n' > "$GL/settings.reg"
+if core/build-app.sh "$BOTTLER_PROJECTS/priv" --no-engine > "$T/build-priv.log" 2>&1 && [ -d "$BOTTLER_PROJECTS/priv/Local Test.app" ]; then ok; else bad "a project builds from a recipes.local recipe"; fi
+if git check-ignore -q recipes.local/x/recipe.json; then ok; else bad "recipes.local/ is git-ignored"; fi
+unset BOTTLER_LOCAL_RECIPES
 # a project's own icon (projects/<name>/icon.*) replaces the one made from the exe,
 # for the app and inside the exe; changing it later re-patches the exe from its .bkp
 core/project.sh custom min "$GA" >/dev/null

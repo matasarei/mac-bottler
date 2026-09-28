@@ -7,8 +7,9 @@ A recipe is a folder `recipes/<game>/` with:
 
 It is the only place anything game-specific lives.
 
-A recipe that should not be public (for one particular copy of a game) can live in
-its project instead: `make project NAME=<name> RECIPE=<path to a recipe folder>
+A recipe that should not be public (for one particular copy of a game) goes in
+`recipes.local/<name>/` (git-ignored), where `make project RECIPE=<name>` finds it
+after `recipes/`. For a one-off, it can also live in its project: `make project NAME=<name> RECIPE=<path to a recipe folder>
 GAME=…` copies the folder to `projects/<name>/recipe/` (git-ignored) and the
 project builds from it. `bottler recipe-check
 recipes/<game>/recipe.json` validates it; unknown keys are errors, so a typo fails

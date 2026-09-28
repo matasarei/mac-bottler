@@ -38,7 +38,9 @@ open "projects/alpha-centauri/Alpha Centauri.app"
 
 A project (`projects/<name>/`, never committed) is one game: which recipe, where
 your copy of the game is, and the built app with the game inside. `RECIPE` can
-also be a path to a recipe folder: it is copied into the project and stays local. An
+also be a path to a recipe folder: it is copied into the project and stays local.
+Recipes of your own that should not be public go in `recipes.local/<name>/`
+(git-ignored); `make project` finds them by name, like the ones in `recipes/`. An
 image dropped into the project as `icon.icns`, `icon.png`, `icon.ico` or `icon.jpg`
 becomes the app's icon (and the Dock's, inside the game's exe) instead of the one
 made from the game. Rebuilding
