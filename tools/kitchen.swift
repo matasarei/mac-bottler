@@ -1,11 +1,15 @@
 // kitchen: the wine-kitchen command-line tool. Built into every app as
 // Resources/bin/kitchen and used by the build, the installer and agents.
 //
-//   kitchen scan <dir>        JSON report on a game folder's executables
+//   kitchen scan <dir>                       JSON report on a game folder's executables
+//   kitchen icon <exe> <out-dir>             rounded macOS icon from the exe's own icon
+//   kitchen exe-icon <exe> <png-dir> <out>   put that icon into a copy of the exe, in place
 //
 // Subcommands are added as recipes need them (docs/RECIPES.md).
 import Foundation
 import CryptoKit
+import CoreGraphics
+import ImageIO
 
 // MARK: - PE reading
 
@@ -104,6 +108,54 @@ struct PEFile {
             if let value = stringFileInfo(key, in: r) { info[key] = value }
         }
         return info
+    }
+
+    /// One leaf of the resource tree (type / id / language), numeric ids only.
+    struct Resource {
+        let type: UInt32, id: UInt32, lang: UInt32
+        let entryOffset: Int      // file offset of its IMAGE_RESOURCE_DATA_ENTRY
+        let rva: UInt32, size: UInt32
+    }
+
+    func resources() -> [Resource] {
+        guard dataDirectories.count > 2, dataDirectories[2].rva != 0,
+              let base = offset(ofRVA: dataDirectories[2].rva) else { return [] }
+        func entries(_ dir: Int) -> [(id: UInt32, target: UInt32)] {
+            guard dir + 16 <= data.count else { return [] }
+            let count = Int(data.u16(dir + 12)) + Int(data.u16(dir + 14))
+            return (0..<min(count, 4096)).compactMap { i in
+                let e = dir + 16 + 8 * i
+                guard e + 8 <= data.count, data.u32(e) & 0x8000_0000 == 0 else { return nil }  // skip named
+                return (data.u32(e), data.u32(e + 4))
+            }
+        }
+        var out: [Resource] = []
+        for t in entries(base) where t.target & 0x8000_0000 != 0 {
+            for n in entries(base + Int(t.target & 0x7FFF_FFFF)) where n.target & 0x8000_0000 != 0 {
+                for l in entries(base + Int(n.target & 0x7FFF_FFFF)) where l.target & 0x8000_0000 == 0 {
+                    let e = base + Int(l.target)
+                    guard e + 16 <= data.count else { continue }
+                    out.append(Resource(type: t.id, id: n.id, lang: l.id, entryOffset: e,
+                                        rva: data.u32(e), size: data.u32(e + 4)))
+                }
+            }
+        }
+        return out
+    }
+
+    func bytes(of r: Resource) -> Data? {
+        guard let o = offset(ofRVA: r.rva), o + Int(r.size) <= data.count else { return nil }
+        return data.subdata(in: o..<o + Int(r.size))
+    }
+
+    /// File byte range of the section holding the resource directory.
+    func resourceSectionFileRange() -> Range<Int>? {
+        guard dataDirectories.count > 2 else { return nil }
+        let rva = dataDirectories[2].rva
+        for s in sections where rva >= s.rva && rva < s.rva &+ max(s.virtualSize, s.rawSize) {
+            return Int(s.rawOffset)..<Int(s.rawOffset) + Int(s.rawSize)
+        }
+        return nil
     }
 
     private func resourceSection() -> Range<Int>? {
@@ -314,6 +366,193 @@ func suggest(_ exes: [[String: Any]], _ found: [[String: String]]) -> [String: A
     return out
 }
 
+
+// MARK: - icons
+
+let rtIcon: UInt32 = 3, rtGroupIcon: UInt32 = 14
+
+/// Entries of the first icon group: (width, bpp, icon resource id). 0 width means 256.
+func iconGroup(_ pe: PEFile) -> (group: PEFile.Resource, entries: [(width: Int, bpp: Int, id: UInt32)])? {
+    guard let g = pe.resources().filter({ $0.type == rtGroupIcon }).min(by: { $0.id < $1.id }),
+          let d = pe.bytes(of: g), d.count >= 6 else { return nil }
+    let count = Int(d.u16(4))
+    var entries: [(Int, Int, UInt32)] = []
+    for i in 0..<count where 6 + 14 * i + 14 <= d.count {
+        let e = 6 + 14 * i
+        let w = Int(d[e]) == 0 ? 256 : Int(d[e])
+        entries.append((w, Int(d.u16(e + 6)), UInt32(d.u16(e + 12))))
+    }
+    return (g, entries.map { (width: $0.0, bpp: $0.1, id: $0.2) })
+}
+
+/// The exe's largest icon (then deepest colour), decoded with ImageIO's ICO reader.
+func largestIcon(_ pe: PEFile) throws -> CGImage {
+    guard let group = iconGroup(pe), !group.entries.isEmpty else { throw PEError(message: "no icon group") }
+    let best = group.entries.max { ($0.width, $0.bpp) < ($1.width, $1.bpp) }!
+    guard let res = pe.resources().first(where: { $0.type == rtIcon && $0.id == best.id }),
+          let blob = pe.bytes(of: res) else { throw PEError(message: "icon \(best.id) missing") }
+    // wrap the one image in an .ico container so ImageIO decodes BMP (with mask) and PNG alike
+    var ico = Data()
+    for v: UInt16 in [0, 1, 1] { withUnsafeBytes(of: v.littleEndian) { ico.append(contentsOf: $0) } }
+    ico.append(contentsOf: [UInt8(best.width % 256), UInt8(best.width % 256), 0, 0])
+    for v: UInt16 in [1, UInt16(best.bpp)] { withUnsafeBytes(of: v.littleEndian) { ico.append(contentsOf: $0) } }
+    for v: UInt32 in [UInt32(blob.count), 22] { withUnsafeBytes(of: v.littleEndian) { ico.append(contentsOf: $0) } }
+    ico.append(blob)
+    guard let src = CGImageSourceCreateWithData(ico as CFData, nil),
+          let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { throw PEError(message: "icon does not decode") }
+    return img
+}
+
+func rgbaContext(_ w: Int, _ h: Int) -> CGContext {
+    CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+}
+
+/// Apple's macOS icon grid: a continuous-corner superellipse (n = 5).
+func squircle(in r: CGRect) -> CGPath {
+    let p = CGMutablePath()
+    let steps = 720
+    for i in 0...steps {
+        let t = Double(i) / Double(steps) * 2 * .pi
+        let c = cos(t), s = sin(t)
+        let x = r.midX + r.width / 2 * CGFloat(copysign(pow(abs(c), 2.0 / 5), c))
+        let y = r.midY + r.height / 2 * CGFloat(copysign(pow(abs(s), 2.0 / 5), s))
+        i == 0 ? p.move(to: CGPoint(x: x, y: y)) : p.addLine(to: CGPoint(x: x, y: y))
+    }
+    p.closeSubpath()
+    return p
+}
+
+/// The source icon, scaled by a whole factor with no smoothing (pixel art stays
+/// sharp), centre-cropped to `body`, clipped to the squircle, on a transparent canvas.
+func roundedIcon(_ src: CGImage, canvas: Int) -> CGImage {
+    let body = Int((Double(canvas) * 824 / 1024).rounded())
+    let offset = (canvas - body) / 2
+    let k = max(1, Int((Double(body) / Double(src.width)).rounded(.up)))
+    let big = src.width * k
+    let ctx = rgbaContext(canvas, canvas)
+    let bodyRect = CGRect(x: offset, y: offset, width: body, height: body)
+    ctx.addPath(squircle(in: bodyRect)); ctx.clip()
+    ctx.interpolationQuality = .none
+    let crop = (big - body) / 2
+    ctx.draw(src, in: CGRect(x: offset - crop, y: offset - crop, width: big, height: big))
+    return ctx.makeImage()!
+}
+
+func downscaled(_ img: CGImage, _ size: Int) -> CGImage {
+    let ctx = rgbaContext(size, size)
+    ctx.interpolationQuality = .high
+    ctx.draw(img, in: CGRect(x: 0, y: 0, width: size, height: size))
+    return ctx.makeImage()!
+}
+
+func writePNG(_ img: CGImage, _ url: URL) throws {
+    guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+        throw PEError(message: "cannot write \(url.path)")
+    }
+    CGImageDestinationAddImage(dest, img, nil)
+    guard CGImageDestinationFinalize(dest) else { throw PEError(message: "cannot write \(url.path)") }
+}
+
+/// AppIcon.icns + icon_1024.png for the app, exe-icon-{256,48,32,16}.png for exe-icon.
+func makeIcons(exe: URL, out: URL) throws {
+    let src = try largestIcon(try PEFile(data: Data(contentsOf: exe)))
+    try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+    let master = roundedIcon(src, canvas: 1024)
+    try writePNG(master, out.appendingPathComponent("icon_1024.png"))
+    let iconset = out.appendingPathComponent("AppIcon.iconset")
+    try? FileManager.default.removeItem(at: iconset)
+    try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
+    for base in [16, 32, 128, 256, 512] {
+        for scale in [1, 2] {
+            let name = "icon_\(base)x\(base)" + (scale == 2 ? "@2x" : "") + ".png"
+            try writePNG(downscaled(master, base * scale), iconset.appendingPathComponent(name))
+        }
+    }
+    let iconutil = Process()
+    iconutil.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
+    iconutil.arguments = ["-c", "icns", iconset.path, "-o", out.appendingPathComponent("AppIcon.icns").path]
+    try iconutil.run(); iconutil.waitUntilExit()
+    guard iconutil.terminationStatus == 0 else { throw PEError(message: "iconutil failed") }
+    try FileManager.default.removeItem(at: iconset)
+    // the exe's own icons: 256 drawn directly (sharp pixels), the small ones from the master
+    try writePNG(roundedIcon(src, canvas: 256), out.appendingPathComponent("exe-icon-256.png"))
+    for size in [48, 32, 16] {
+        try writePNG(downscaled(master, size), out.appendingPathComponent("exe-icon-\(size).png"))
+    }
+}
+
+struct RefusedError: Error { let message: String }
+
+/// Replace an exe's icons in place: the new PNG icons go into the existing block
+/// of RT_ICON data, the RT_ICON entries are re-pointed and the group is rewritten
+/// in its own slot. Nothing moves: a full resource rebuild (rcedit) broke a game
+/// with self-modifying code. Refuses unless everything fits, the size is unchanged
+/// and every changed byte is inside the resource section.
+func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
+    let original = try Data(contentsOf: exe)
+    let pe = try PEFile(data: original)
+    guard let rsrcRange = pe.resourceSectionFileRange(), let group = iconGroup(pe) else {
+        throw RefusedError(message: "no icon resources")
+    }
+    let all = pe.resources()
+    let icons = all.filter { $0.type == rtIcon }.sorted { $0.id < $1.id }
+    let pngs: [(size: Int, data: Data)] = try [256, 48, 32, 16].compactMap { size in
+        let url = pngDir.appendingPathComponent("exe-icon-\(size).png")
+        return FileManager.default.fileExists(atPath: url.path) ? (size, try Data(contentsOf: url)) : nil
+    }
+    guard !pngs.isEmpty else { throw RefusedError(message: "no exe-icon-*.png in \(pngDir.path)") }
+    guard icons.count >= pngs.count else {
+        throw RefusedError(message: "the exe has \(icons.count) icon slots, \(pngs.count) needed")
+    }
+    // the block the icon data occupies, which must hold nothing else
+    let start = icons.map { $0.rva }.min()!, end = icons.map { $0.rva + $0.size }.max()!
+    for r in all where r.type != rtIcon && r.rva < end && r.rva + r.size > start {
+        throw RefusedError(message: "icon data is interleaved with other resources")
+    }
+    let aligned = pngs.reduce(0) { ($0 + $1.data.count + 3) & ~3 }
+    guard aligned <= Int(end - start) else {
+        throw RefusedError(message: "new icons need \(aligned) bytes, the icon block has \(end - start)")
+    }
+    guard let groupSize = pe.bytes(of: group.group)?.count, 6 + 14 * pngs.count <= groupSize,
+          let groupOffset = pe.offset(ofRVA: group.group.rva), let blockOffset = pe.offset(ofRVA: start) else {
+        throw RefusedError(message: "the icon group slot is too small")
+    }
+
+    var d = original
+    d.replaceSubrange(blockOffset..<blockOffset + Int(end - start), with: Data(count: Int(end - start)))
+    var rva = start
+    var placed: [(size: Int, rva: UInt32, length: Int, id: UInt32)] = []
+    for (i, png) in pngs.enumerated() {
+        let o = blockOffset + Int(rva - start)
+        d.replaceSubrange(o..<o + png.data.count, with: png.data)
+        placed.append((png.size, rva, png.data.count, icons[i].id))
+        rva = (rva + UInt32(png.data.count) + 3) & ~3
+    }
+    func put32(_ v: UInt32, _ o: Int) { withUnsafeBytes(of: v.littleEndian) { d.replaceSubrange(o..<o + 4, with: $0) } }
+    for (i, icon) in icons.enumerated() {
+        let p = placed[min(i, placed.count - 1)]   // spare slots point at the smallest icon
+        put32(p.rva, icon.entryOffset); put32(UInt32(p.length), icon.entryOffset + 4)
+    }
+    var g = Data()
+    for v: UInt16 in [0, 1, UInt16(placed.count)] { withUnsafeBytes(of: v.littleEndian) { g.append(contentsOf: $0) } }
+    for p in placed {
+        g.append(contentsOf: [UInt8(p.size % 256), UInt8(p.size % 256), 0, 0])
+        for v: UInt16 in [1, 32] { withUnsafeBytes(of: v.littleEndian) { g.append(contentsOf: $0) } }
+        withUnsafeBytes(of: UInt32(p.length).littleEndian) { g.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt16(p.id).littleEndian) { g.append(contentsOf: $0) }
+    }
+    d.replaceSubrange(groupOffset..<groupOffset + groupSize, with: g + Data(count: groupSize - g.count))
+    put32(UInt32(g.count), group.group.entryOffset + 4)
+
+    guard d.count == original.count else { throw RefusedError(message: "size changed") }
+    for i in 0..<d.count where d[i] != original[i] && !rsrcRange.contains(i) {
+        throw RefusedError(message: String(format: "byte 0x%x outside .rsrc would change", i))
+    }
+    try d.write(to: out, options: .atomic)
+}
+
 // MARK: - main
 
 func fail(_ message: String) -> Never {
@@ -336,6 +575,19 @@ case "scan":
     } catch {
         fail("kitchen scan: \(error)")
     }
+case "icon":
+    guard args.count == 4 else { fail("usage: kitchen icon <exe> <out-dir>") }
+    do { try makeIcons(exe: URL(fileURLWithPath: args[2]), out: URL(fileURLWithPath: args[3])) }
+    catch { fail("kitchen icon: \(error)") }
+case "exe-icon":
+    guard args.count == 5 else { fail("usage: kitchen exe-icon <exe> <png-dir> <out-exe>") }
+    do {
+        try patchExeIcon(exe: URL(fileURLWithPath: args[2]), pngDir: URL(fileURLWithPath: args[3]),
+                         out: URL(fileURLWithPath: args[4]))
+    } catch let e as RefusedError {
+        FileHandle.standardError.write("kitchen exe-icon: refused: \(e.message)\n".data(using: .utf8)!)
+        exit(3)
+    } catch { fail("kitchen exe-icon: \(error)") }
 default:
-    fail("usage: kitchen scan <dir>")
+    fail("usage: kitchen scan <dir> | icon <exe> <out-dir> | exe-icon <exe> <png-dir> <out-exe>")
 }

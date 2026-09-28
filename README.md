@@ -23,6 +23,9 @@ time from your game's own executable.
 make check
 ```
 
+For development, `make test` also needs Python 3 with Pillow (`pip3 install pillow`);
+it runs on synthetic executables only, never on game files.
+
 ## Layout
 
 | Path | What |
