@@ -6,7 +6,7 @@ description: Fix or extend mac-bottler's shared code (core/, tools/, win/) when 
 # /improve-bottler <the problem>
 
 For changes to `core/`, `tools/` or `win/`. A change that only one game needs
-belongs in its recipe instead (`CLAUDE.md`: nothing generic is built ahead of a
+belongs in its recipe instead (`AGENTS.md`: nothing generic is built ahead of a
 recipe's need, and nothing game-specific lives outside `recipes/`).
 
 ## Steps
