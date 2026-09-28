@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Environment for every wine call against an app bundle. Source it with the
 # bundle's Resources dir in $RES. One place, so the prefix build and the game
 # launch can never drift apart.
