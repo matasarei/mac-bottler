@@ -11,6 +11,11 @@ found on; the lesson is written so it applies to other games too.
   WoWSilicon runtime bundles FreeType there but loads it by name; without the
   path, wine reports "cannot find the FreeType font library" and GDI games lose
   their TrueType text (WoW draws its own fonts, so wow-launcher never noticed).
+- **CrossOver 23 runs 32-bit programs inside `wine64` (WoW64) only when there is
+  no `bin/wine`.** A `bin/wine` added for convenience (symlink or script) is
+  taken for a 32-bit loader: wineboot leaves `syswow64` empty and every 32-bit
+  program fails with "failed to start". Called as `wine` through a symlink,
+  `wine64` also segfaults. Scripts use `$WINE` from `core/wine-env.sh`.
 - **WoWSilicon Wine 11 (r17) vs CrossOver 23, Alpha Centauri + Thinker, main
   menu, 2026-09-28:** starts, sizes and centres fine, but the game used ~104% CPU
   (focused; ~57% unfocused) plus ~48% for wineserver, against ~10% + 2% on

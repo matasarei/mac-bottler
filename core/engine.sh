@@ -13,22 +13,40 @@ if [ -x "$RES/wine/$ENGINE_LOADER" ]; then
     echo "==> engine $NAME already present, skipping"
     exit 0
 fi
+mkdir -p "$CACHE" "$RES/wine"
 case "$ENGINE_KIND" in
-    tar.xz) ;;
-    *) echo "ERROR: engine kind '$ENGINE_KIND' ($NAME) is not supported yet"; exit 1 ;;
+tar.xz)
+    ARCHIVE="$CACHE/$NAME.tar.xz"
+    if [ ! -f "$ARCHIVE" ]; then
+        echo "==> downloading engine $NAME"
+        curl -fL --progress-bar -o "$ARCHIVE.part" "$ENGINE_URL"
+        mv "$ARCHIVE.part" "$ARCHIVE"
+    fi
+    echo "$ENGINE_SHA256  $ARCHIVE" | shasum -a 256 -c - >/dev/null \
+        || { echo "ERROR: $NAME checksum mismatch: delete $ARCHIVE and retry"; exit 1; }
+    echo "==> unpacking engine $NAME"
+    tar -xJf "$ARCHIVE" --strip-components 1 -C "$RES/wine"
+    ;;
+wineskin)
+    command -v 7zz >/dev/null || { echo "ERROR: 7zz not found: brew install sevenzip"; exit 1; }
+    ARCHIVE="${ENGINE_URL#file://}"
+    [ -f "$ARCHIVE" ] || { echo "ERROR: engine archive not found: $ARCHIVE (install it with Wineskin Winery)"; exit 1; }
+    echo "$ENGINE_SHA256  $ARCHIVE" | shasum -a 256 -c - >/dev/null \
+        || { echo "ERROR: $NAME archive checksum mismatch: $ARCHIVE"; exit 1; }
+    [ -d "$ENGINE_FRAMEWORKS" ] || { echo "ERROR: Wineskin wrapper frameworks not found: $ENGINE_FRAMEWORKS"; exit 1; }
+    [ "$("$(dirname "$0")/tree-sha.sh" "$ENGINE_FRAMEWORKS")" = "$ENGINE_FRAMEWORKS_SHA256" ] \
+        || { echo "ERROR: $NAME frameworks checksum mismatch: $ENGINE_FRAMEWORKS"; exit 1; }
+    echo "==> unpacking engine $NAME"
+    TMP="$CACHE/$NAME.unpack"; rm -rf "$TMP"; mkdir -p "$TMP"
+    7zz x -y -o"$TMP" "$ARCHIVE" >/dev/null
+    tar -xf "$TMP"/*.tar --strip-components 1 -C "$RES/wine"
+    rm -rf "$TMP"
+    # the engine loads these by name, from the same place as the other engines' (core/wine-env.sh)
+    mkdir -p "$RES/wine/lib/external"
+    ditto "$ENGINE_FRAMEWORKS" "$RES/wine/lib/external"
+    ;;
+*)
+    echo "ERROR: engine kind '$ENGINE_KIND' ($NAME) is not supported"; exit 1 ;;
 esac
 
-mkdir -p "$CACHE"
-ARCHIVE="$CACHE/$NAME.tar.xz"
-if [ ! -f "$ARCHIVE" ]; then
-    echo "==> downloading engine $NAME"
-    curl -fL --progress-bar -o "$ARCHIVE.part" "$ENGINE_URL"
-    mv "$ARCHIVE.part" "$ARCHIVE"
-fi
-echo "$ENGINE_SHA256  $ARCHIVE" | shasum -a 256 -c - >/dev/null \
-    || { echo "ERROR: $NAME checksum mismatch: delete $ARCHIVE and retry"; exit 1; }
-
-echo "==> unpacking engine $NAME"
-mkdir -p "$RES/wine"
-tar -xJf "$ARCHIVE" --strip-components 1 -C "$RES/wine"
 [ -x "$RES/wine/$ENGINE_LOADER" ] || { echo "ERROR: $NAME unpacked without $ENGINE_LOADER"; exit 1; }

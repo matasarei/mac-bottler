@@ -3,8 +3,6 @@
 # usage: core/prefix.sh <Resources dir>
 set -euo pipefail
 mkdir -p "$1"; RES="$(cd "$1" && pwd)"   # wine refuses relative prefix paths
-WINE="$RES/wine/bin/wine"
-[ -x "$WINE" ] || { echo "ERROR: no engine at $RES/wine (run make engine)"; exit 1; }
 
 if [ -d "$RES/prefix/drive_c" ]; then
     echo "==> prefix already present, skipping"
@@ -12,6 +10,7 @@ if [ -d "$RES/prefix/drive_c" ]; then
 fi
 # shellcheck source=core/wine-env.sh
 source "$(dirname "$0")/wine-env.sh"
+[ -x "$WINE" ] || { echo "ERROR: no engine at $RES/wine (run make engine)"; exit 1; }
 mkdir -p "$HOME"
 echo "==> creating the wine prefix (about a minute)"
 LOG="$RES/prefix-build.log"

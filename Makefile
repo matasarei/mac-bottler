@@ -9,7 +9,7 @@
 # compile, lint); until then they are not listed here.
 
 APP    ?= build/kitchen-test.app
-ENGINE ?= wowsilicon-r17
+ENGINE ?= crossover-23
 RES     = $(APP)/Contents/Resources
 DEPS    = build/deps
 
