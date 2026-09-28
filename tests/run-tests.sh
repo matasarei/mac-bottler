@@ -6,12 +6,16 @@ cd "$(dirname "$0")/.."
 AUDIT_FAIL=0
 while IFS= read -r f; do
     case "$(echo "$f" | tr '[:upper:]' '[:lower:]')" in
-        *.exe|*.dll|*.sys|*.icd|*.pcx|*.bmp|*.png|*.jpg|*.ico|*.icns|*.wav|*.mp3|*.ogg|*.flc|*.wve|*.bik|*.cvr|*.sav|*.mpq|*.ttf|*.fon|*.zip|*.7z|*.tar*|*.dmg|*.iso)
+        *.exe|*.dll|*.sys|*.icd|*.pcx|*.bmp|*.png|*.jpg|*.ico|*.icns|*.wav|*.mp3|*.ogg|*.flc|*.wve|*.bik|*.cvr|*.sav|*.mpq|*.ttf|*.fon|*.zip|*.7z|*.tar*|*.dmg|*.iso|*.reg)
             echo "FAIL: repo tracks a game/media/archive file: $f"; AUDIT_FAIL=1 ;;
     esac
     if [ -f "$f" ] && ! grep -Iq . "$f" 2>/dev/null && [ -s "$f" ]; then echo "FAIL: repo tracks a binary file: $f"; AUDIT_FAIL=1; fi
     if [ -f "$f" ] && [ "$(stat -f %z "$f")" -gt 204800 ]; then echo "FAIL: repo tracks a file over 200 KB: $f"; AUDIT_FAIL=1; fi
 done < <(git ls-files)
+# CD keys and serials (five groups of five letters and digits, and the like) belong to a player's copy
+if git ls-files -z | xargs -0 grep -IlE '\b[A-Z0-9]{4,6}(-[A-Z0-9]{4,6}){3,5}\b' 2>/dev/null; then
+    echo "FAIL: repo tracks something shaped like a CD key or serial (files above)"; AUDIT_FAIL=1
+fi
 [ "$AUDIT_FAIL" -eq 0 ] || exit 1
 
 command -v python3 >/dev/null && python3 -c "import PIL" 2>/dev/null \
