@@ -101,6 +101,12 @@ found on; the lesson is written so it applies to other games too.
   squircle would cut the figure and leave holes, so it is drawn whole on a flat
   stone-coloured plate at a whole-pixel scale. Pictures (SMAC's `terran.exe`: 0%; a
   round icon is ~21%) still fill the body.
+- **The exe's icon is re-patched from the stock `.bkp` at every install**, and
+  only rewritten when the bytes differ, so a changed icon (a project's `icon.*`)
+  reaches the Dock too. Exes are recognised by their `MZ` header, not their name
+  (`Game.exe.bkp`).
+- **Large images are scaled down to the body**, not cropped: the fill rule was
+  written for 32-48 px exe icons, scaled up by whole pixels.
 - **The app icon is made from the stock exe** (`<exe>.bkp`) when `appIcon` and
   `exeIcon` name the same exe: a rebuild keeps the installed game, whose exe
   already carries the made icon.

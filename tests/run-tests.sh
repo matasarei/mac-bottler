@@ -148,6 +148,16 @@ pe "$I/card.exe" --imports KERNEL32.dll --icons 32 --card
 "$T/bottler" icon "$I/card.exe" "$I/card" >/dev/null
 EDGE="$(rgb "$I/card/icon_1024.png" 115 512)"
 if [ "${EDGE##* }" = "255" ] && [ "$EDGE" != "170 165 154 255" ]; then ok; else bad "a card with margins is trimmed and fills the body, no plate: edge is $EDGE"; fi
+# a large image (a finished round macOS icon): scaled down to the body, not cropped
+python3 -c "
+import sys
+from PIL import Image, ImageDraw
+im = Image.new('RGBA', (1024, 1024), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+d.ellipse((0, 0, 1023, 1023), fill=(255, 0, 0, 255)); d.ellipse((60, 60, 963, 963), fill=(0, 0, 255, 255))
+im.save(sys.argv[1])" "$I/round.png"
+if "$T/bottler" icon "$I/round.png" "$I/round" >/dev/null; then ok; else bad "icon takes an image file"; fi
+EDGE="$(rgb "$I/round/icon_1024.png" 112 512)"
+if [ "$EDGE" = "255 0 0 255" ]; then ok; else bad "a large image is scaled to the body, its rim kept (not cropped): edge is $EDGE"; fi
 mode() { python3 -c "import sys; from PIL import Image; print(Image.open(sys.argv[1]).mode)" "$1"; }
 if [ "$(mode "$I/fig/exe-icon-256.png")" = "P" ]; then ok; else bad "few-colour exe icon is a palette PNG"; fi
 # two icon slots with ~4 KB of room: the largest icon still goes in, the rest is left out
@@ -429,6 +439,16 @@ expect "recipe-field lists the registry files" "settings.reg" "$("$T/bottler" re
 rm "$GL/settings.reg"; mkdir -p "$T/gl-icons"
 "$T/bottler" install "$BOTTLER_PROJECTS/mine/recipe" "$GL" "$T/gl-game" "$T/gl-icons" >/dev/null 2>&1; rc=$?
 expect "a registry file missing from the game is refused" "3" "$rc"
+# a project's own icon (projects/<name>/icon.*) replaces the one made from the exe,
+# for the app and inside the exe; changing it later re-patches the exe from its .bkp
+core/project.sh custom min "$GA" >/dev/null
+core/build-app.sh "$BOTTLER_PROJECTS/custom" --no-engine > "$T/build-custom1.log" 2>&1
+CG="$BOTTLER_PROJECTS/custom/Bottler Test.app/Contents/Resources/game"
+EXE1="$(md5 -q "$CG/Game.exe")"
+cp "$I/round.png" "$BOTTLER_PROJECTS/custom/icon.png"
+if core/build-app.sh "$BOTTLER_PROJECTS/custom" --no-engine > "$T/build-custom2.log" 2>&1; then ok; else bad "a project with icon.png builds"; fi
+expect "the project's icon is the app icon" "255 0 0 255" "$(rgb "$BOTTLER_PROJECTS/custom/Bottler Test.app/Contents/Resources/icon/icon_1024.png" 112 512 2>/dev/null)"
+if [ "$(md5 -q "$CG/Game.exe")" != "$EXE1" ] && [ "$(md5 -q "$CG/Game.exe.bkp")" = "$(md5 -q "$GA/Game.exe")" ]; then ok; else bad "a changed icon re-patches the exe from the stock .bkp"; fi
 unset BOTTLER_RECIPES BOTTLER_PROJECTS
 
 # --- dock-name on a fake CrossOver engine

@@ -86,7 +86,7 @@ the build instead of the game.
 | `install.downloads` | pinned archives fetched at build time: `url`, `sha256`, and `files` mapping a path inside the archive to a path in the game folder. Zip only for now. |
 | `install.ini` | INI edits applied at install; the section is created and keys added when missing; CRLF files stay CRLF |
 | `install.proxy` | `dll` in the game folder is renamed `<name>_orig.dll` and replaced by a proxy forwarding every export to it. The export list is read from the project's own copy of the DLL at build time (`win/proxy.sh def`), so nothing derived from the game is in the repo. |
-| `install.appIcon` | the exe whose icon becomes the app icon (`bottler icon`) |
+| `install.appIcon` | the exe whose icon becomes the app icon (`bottler icon`); a project's own `projects/<name>/icon.*` wins over it |
 | `install.registry` | `.reg` files in the game folder, imported into the prefix at every build (the prefix is rebuilt from the cache each time); a listed file missing from the game refuses the install |
 | `install.exeIcon` | the exe that gets that icon written into it in place (`bottler exe-icon`), so the Dock shows it; the stock exe is kept as `<exe>.bkp` |
 | `launch.variants` | what the player can start: `label`, `exe` (relative to the game folder), `args` (`{w}`, `{h}`, `{x}`, `{y}` are the window's geometry) |

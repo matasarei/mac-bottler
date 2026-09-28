@@ -87,6 +87,12 @@ mkdir -p "$RES/prefix/drive_c"
 
 echo "==> recipe"
 cp -R "$RECIPE" "$RES/recipe"
+# the project's own icon, if it has one (projects/<name>/icon.icns|png|ico|jpg)
+for ext in icns png ico jpg; do
+    if [ -f "$PROJ/icon.$ext" ]; then
+        cp "$PROJ/icon.$ext" "$RES/recipe/project-icon.$ext"; echo "==> icon: the project's icon.$ext"; break
+    fi
+done
 with_lock downloads "$BOTTLER" fetch "$RES/recipe" "$CACHE/downloads" "$RES/recipe/files"
 if [ -n "$PROXY_DLL" ]; then
     # the export list comes from the project's own copy of the DLL, never from the repo

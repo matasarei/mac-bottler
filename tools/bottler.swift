@@ -3,7 +3,7 @@
 //
 //   bottler scan <dir>                       JSON report on a game folder's executables
 //   bottler hints <game name>                what Lutris' installer scripts know (hints only)
-//   bottler icon <exe> <out-dir>             rounded macOS icon from the exe's own icon
+//   bottler icon <exe|image> <out-dir>       rounded macOS icon from the exe's own icon (or an image file)
 //   bottler exe-icon <exe> <png-dir> <out>   put that icon into a copy of the exe, in place
 //   bottler displays                         JSON list of the connected displays
 //   bottler geometry <display|main> <mode> [align]
@@ -496,11 +496,19 @@ func roundedIcon(_ src: CGImage, canvas: Int) -> CGImage {
         // holes, so it sits whole on a plate, at a whole-pixel scale
         ctx.setFillColor(CGColor(srgbRed: 170 / 255, green: 165 / 255, blue: 154 / 255, alpha: 1))
         ctx.fill(bodyRect)
-        let size = src.width * max(1, Int(Double(body) * 0.78 / Double(src.width)))
+        let target = Int(Double(body) * 0.78)
+        let size = src.width <= target ? src.width * (target / src.width) : target
+        if src.width > target { ctx.interpolationQuality = .high }   // a large image: scaled down
         let o = (canvas - size) / 2
         ctx.draw(src, in: CGRect(x: o, y: o, width: size, height: size))
     } else {
-        // a picture: it fills the body, cropped by a few pixels at most
+        // a picture: it fills the body, cropped by a few pixels at most; a large
+        // image (a finished icon from a file) is scaled down to the body instead
+        if src.width > body {
+            ctx.interpolationQuality = .high
+            ctx.draw(src, in: bodyRect)
+            return ctx.makeImage()!
+        }
         let big = src.width * max(1, Int((Double(body) / Double(src.width)).rounded(.up)))
         let crop = (big - body) / 2
         ctx.draw(src, in: CGRect(x: offset - crop, y: offset - crop, width: big, height: big))
@@ -602,9 +610,21 @@ func writePNG(_ img: CGImage, _ url: URL) throws {
     guard CGImageDestinationFinalize(dest) else { throw PEError(message: "cannot write \(url.path)") }
 }
 
+/// The icon art in `url`: an exe's (or DLL's, whatever its name: Game.exe.bkp) largest
+/// icon, or the largest image in an image file (.icns, .png, .ico, .jpg - a project's
+/// own icon).
+func iconSource(_ url: URL) throws -> CGImage {
+    let data = try Data(contentsOf: url)
+    if data.starts(with: [0x4D, 0x5A]) { return try largestIcon(try PEFile(data: data)) }   // "MZ": an exe or DLL
+    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw PEError(message: "cannot read \(url.path)") }
+    let images = (0..<CGImageSourceGetCount(src)).compactMap { CGImageSourceCreateImageAtIndex(src, $0, nil) }
+    guard let best = images.max(by: { $0.width < $1.width }) else { throw PEError(message: "no image in \(url.path)") }
+    return best
+}
+
 /// AppIcon.icns + icon_1024.png for the app, exe-icon-{256,48,32,16}.png for exe-icon.
 func makeIcons(exe: URL, out: URL) throws {
-    let src = trimmedToSquare(try largestIcon(try PEFile(data: Data(contentsOf: exe))))
+    let src = trimmedToSquare(try iconSource(exe))
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
     let master = roundedIcon(src, canvas: 1024)
     try writePNG(master, out.appendingPathComponent("icon_1024.png"))
@@ -1294,26 +1314,40 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
         }
     }
 
-    // 7. icons: the app icon, and the same icon inside the running exe (for the Dock)
-    if let from = recipe.install?.appIcon {
-        let icns = iconDir.appendingPathComponent("AppIcon.icns")
-        if !fm.fileExists(atPath: icns.path) {
+    // 7. icons: the app icon, and the same icon inside the running exe (for the Dock).
+    // A project's own icon (the build copies projects/<name>/icon.* in as
+    // project-icon.*) wins over the one made from the recipe's appIcon exe.
+    let icns = iconDir.appendingPathComponent("AppIcon.icns")
+    let projectIcon = (try? fm.contentsOfDirectory(at: recipeDir, includingPropertiesForKeys: nil))?
+        .first { $0.deletingPathExtension().lastPathComponent == "project-icon" }
+    if !fm.fileExists(atPath: icns.path) {
+        if let custom = projectIcon {
+            try makeIcons(exe: custom, out: iconDir); note("made the app icon from the project's \(custom.lastPathComponent)")
+        } else if let from = recipe.install?.appIcon {
             // the stock exe, when exeIcon has already put the made icon into it
             let stock = game.appendingPathComponent(from + ".bkp")
             let exe = fm.fileExists(atPath: stock.path) ? stock : game.appendingPathComponent(from)
             try makeIcons(exe: exe, out: iconDir); note("made the app icon from \(from)")
         }
     }
-    if let target = recipe.install?.exeIcon {
+    if let target = recipe.install?.exeIcon, fm.fileExists(atPath: icns.path) {
+        // always from the stock copy, so a changed icon reaches the exe too
         let exe = game.appendingPathComponent(target), bkp = game.appendingPathComponent(target + ".bkp")
-        if !fm.fileExists(atPath: bkp.path) {
-            try fm.copyItem(at: exe, to: bkp)
-            do {
-                try patchExeIcon(exe: bkp, pngDir: iconDir, out: exe); note("put the icon into \(target) (stock kept as \(target).bkp)")
-            } catch let e as RefusedError {
-                try? fm.removeItem(at: bkp)   // so a later install (a fixed tool) tries again
-                print("warning: \(target) keeps its own icon: \(e.message)")
+        let fresh = !fm.fileExists(atPath: bkp.path)
+        if fresh { try fm.copyItem(at: exe, to: bkp) }
+        let before = try Data(contentsOf: exe)
+        do {
+            let patched = iconDir.appendingPathComponent("patched.exe")
+            try patchExeIcon(exe: bkp, pngDir: iconDir, out: patched)
+            if try Data(contentsOf: patched) != before {
+                _ = try fm.replaceItemAt(exe, withItemAt: patched)
+                note("put the icon into \(target) (stock kept as \(target).bkp)")
+            } else {
+                try fm.removeItem(at: patched)
             }
+        } catch let e as RefusedError {
+            if fresh { try? fm.removeItem(at: bkp) }   // so a later install (a fixed tool) tries again
+            print("warning: \(target) keeps its own icon: \(e.message)")
         }
     }
 
@@ -1645,7 +1679,7 @@ case "scan":
         fail("bottler scan: \(error)")
     }
 case "icon":
-    guard args.count == 4 else { fail("usage: bottler icon <exe> <out-dir>") }
+    guard args.count == 4 else { fail("usage: bottler icon <exe|image> <out-dir>") }
     do { try makeIcons(exe: URL(fileURLWithPath: args[2]), out: URL(fileURLWithPath: args[3])) }
     catch { fail("bottler icon: \(error)") }
 case "exe-icon":
