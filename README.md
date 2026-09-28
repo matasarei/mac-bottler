@@ -51,9 +51,12 @@ so a rebuild takes seconds.
 
 ## With an agent
 
-In Claude Code, `/cook "/path/to/your/game folder"` runs the whole loop: it scans
-the game, picks or drafts a recipe, builds the app, launches and observes it, and
-fixes what it finds, asking you only about sound and feel. See `.claude/skills/`.
+Agents follow `AGENTS.md` (the rules and the skills; `CLAUDE.md` adds only what is
+specific to Claude Code). The **cook** skill runs the whole loop: it scans the game,
+picks or drafts a recipe, builds the app, launches and observes it, and fixes what
+it finds, asking you only about sound and feel. In Claude Code that is
+`/cook "/path/to/your/game folder"`; any other agent follows
+`.claude/skills/cook/SKILL.md`.
 
 ## Layout
 

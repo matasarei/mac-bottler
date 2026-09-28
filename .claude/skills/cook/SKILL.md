@@ -7,7 +7,7 @@ description: Turn a Windows game folder the user owns into a working mac-bottler
 
 Takes a game folder the user owns and ends with `projects/<name>/<Title>.app`
 that starts the game and plays well, plus a committed recipe with notes. Read
-`CLAUDE.md` and `docs/INTERNALS.md` before starting: most problems are already
+`AGENTS.md` and `docs/INTERNALS.md` before starting: most problems are already
 in there.
 
 ## Rules that never bend
