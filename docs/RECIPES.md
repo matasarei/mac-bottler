@@ -1,7 +1,95 @@
 # Recipes
 
-A recipe is `recipes/<game>/recipe.json` plus `recipes/<game>/notes.md`. It is
-the only place anything game-specific lives.
+A recipe is a folder `recipes/<game>/` with:
 
-The schema is defined together with the generic installer and checked by
-`kitchen recipe-check`; this page is filled in with it.
+- `recipe.json`: how the game is detected, installed and launched (schema below);
+- `notes.md`: what was tried on this game and why, including what failed;
+- any file the recipe names, e.g. a proxy DLL's `.def` (`win/proxy.sh def`).
+
+It is the only place anything game-specific lives. `kitchen recipe-check
+recipes/<game>/recipe.json` validates it; unknown keys are errors, so a typo fails
+the build instead of the game.
+
+## Build time and install time
+
+- `make app RECIPE=recipes/<game>` (on the machine that builds the app) copies the
+  recipe into the app as `Resources/recipe/`, fetches and verifies its
+  `downloads`, and builds its `proxy` DLL. Results go to `Resources/recipe/files/`.
+- Install (the app's Install button, `kitchen install`) copies the player's own
+  game folder into the app and applies `install`. It needs no network and no
+  compiler, and running it again changes nothing.
+
+## Schema (version 1)
+
+```json
+{
+  "schema": 1,
+  "title": "Alpha Centauri",
+  "bundleId": "com.matasarei.kitchen.alpha-centauri",
+  "engine": "crossover-23",
+
+  "detect": {
+    "required": ["terranx.exe", "terran.exe"],
+    "fingerprint": "terranx.exe",
+    "builds": {
+      "d505e007c20824a9869ff18099f2e9c8": { "status": "verified", "label": "Steam v2.0" },
+      "0123456789abcdef0123456789abcdef": { "status": "refuse", "message": "v1.0: apply the official 2.0 patch" }
+    },
+    "unknown": "warn"
+  },
+
+  "install": {
+    "exclude": ["EmptySteamDepot", "secdrv.sys", "drvmgt.dll"],
+    "rename": { "ddraw.dll": "ddraw.dll.gog" },
+    "downloads": [
+      { "url": "https://…/Thinker_v5.5.zip", "sha256": "…", "files": { "thinker.exe": "thinker.exe", "basenames": "basenames" } }
+    ],
+    "ini": [
+      { "file": "Alpha Centauri.Ini", "section": "Alpha Centauri", "set": { "DirectDraw": "0" } }
+    ],
+    "proxy": { "dll": "soundx.dll", "def": "soundx.def" },
+    "appIcon": "terran.exe",
+    "exeIcon": "terranx.exe"
+  },
+
+  "launch": {
+    "variants": [
+      { "label": "Alien Crossfire", "exe": "thinker.exe", "args": [] },
+      { "label": "Alpha Centauri", "exe": "thinker.exe", "args": ["-smac"] }
+    ],
+    "window": { "mode": "pillarbox:4:3", "align": 8, "backdrop": true, "menubar": "hide", "title": "" },
+    "ini": [
+      { "file": "thinker.ini", "section": "thinker", "set": { "window_width": "{w}", "window_height": "{h}" } }
+    ],
+    "env": {},
+    "dllOverrides": {}
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `schema` | always `1` for now |
+| `title` | app and window name shown to the player |
+| `bundleId` | the app's bundle identifier |
+| `engine` | a file name in `engines/` without `.env` |
+| `detect.required` | paths that must exist in the chosen game folder |
+| `detect.fingerprint` | the file whose md5 identifies the build |
+| `detect.builds` | md5 → `status` `verified` (tested), `unverified` (accepted with a warning) or `refuse` (with `message`); `label` is for people |
+| `detect.unknown` | a build not listed: `warn` (install, with a warning) or `refuse` |
+| `install.exclude` | top-level names not copied from the game folder |
+| `install.rename` | game-folder file → new name, when it exists (e.g. set a bundled wrapper aside) |
+| `install.downloads` | pinned archives fetched at build time: `url`, `sha256`, and `files` mapping a path inside the archive to a path in the game folder. Zip only for now. |
+| `install.ini` | INI edits applied at install; the section is created and keys added when missing; CRLF files stay CRLF |
+| `install.proxy` | `dll` in the game folder is renamed `<name>_orig.dll` and replaced by a proxy built from `def` (a `.def` in the recipe folder, from `win/proxy.sh def`); the original's exports must match the `.def` |
+| `install.appIcon` | the exe whose icon becomes the app icon (`kitchen icon`) |
+| `install.exeIcon` | the exe that gets that icon written into it in place (`kitchen exe-icon`), so the Dock shows it; the stock exe is kept as `<exe>.bkp` |
+| `launch.variants` | what the player can start: `label`, `exe` (relative to the game folder), `args` |
+| `launch.window.mode` | `native` or `pillarbox:<w>:<h>` (see `kitchen geometry`) |
+| `launch.window.align` | round the window's sides down to a multiple of this |
+| `launch.window.backdrop` | black backdrop behind the window (`kitchen frame`) |
+| `launch.window.menubar` | `hide` (auto-hide while playing) or `keep` |
+| `launch.window.title` | text the game window's title contains, when the largest window is not the game's |
+| `launch.ini` | INI edits applied at every launch; `{w}`, `{h}`, `{x}`, `{y}` are the window's geometry |
+| `launch.env` | extra environment variables for wine |
+| `launch.dllOverrides` | `WINEDLLOVERRIDES` entries, e.g. `{"ddraw": "n,b"}` |

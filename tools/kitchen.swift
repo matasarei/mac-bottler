@@ -10,6 +10,11 @@
 //                                            coordinates: "x y width height"
 //   kitchen frame <display|main> <pid>       black backdrop behind the game's window
 //   kitchen menubar hide|restore <marker>    auto-hide the menu bar while playing
+//   kitchen recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
+//   kitchen fetch <recipe-dir> <cache> <out> build time: pinned downloads into <out>
+//   kitchen install <recipe-dir> <source> <game-dir> <icon-dir>
+//                                            copy the player's game and apply the recipe
+//   kitchen ini-set <file> <section> key=value...   edit an INI file (CRLF kept)
 //
 // Subcommands are added as recipes need them (docs/RECIPES.md).
 import Foundation
@@ -721,6 +726,369 @@ func menubar(_ action: String, marker: String) throws {
     Thread.sleep(forTimeInterval: 0.5)   // let the screens' usable area settle
 }
 
+
+// MARK: - recipes
+
+/// Allowed keys per object path; anything else in a recipe is a typo.
+let recipeKeys: [String: Set<String>] = [
+    "": ["schema", "title", "bundleId", "engine", "detect", "install", "launch"],
+    "detect": ["required", "fingerprint", "builds", "unknown"],
+    "detect.builds.*": ["status", "label", "message"],
+    "install": ["exclude", "rename", "downloads", "ini", "proxy", "appIcon", "exeIcon"],
+    "install.downloads[]": ["url", "sha256", "files"],
+    "install.ini[]": ["file", "section", "set"],
+    "install.proxy": ["dll", "def"],
+    "launch": ["variants", "window", "ini", "env", "dllOverrides"],
+    "launch.variants[]": ["label", "exe", "args"],
+    "launch.window": ["mode", "align", "backdrop", "menubar", "title"],
+    "launch.ini[]": ["file", "section", "set"],
+]
+/// Objects whose keys are free-form (maps).
+let recipeMaps: Set<String> = ["detect.builds", "install.rename", "install.downloads[].files",
+                               "install.ini[].set", "launch.ini[].set", "launch.env", "launch.dllOverrides"]
+
+struct Recipe: Codable {
+    struct Build: Codable { var status: String; var label: String?; var message: String? }
+    struct Detect: Codable {
+        var required: [String]; var fingerprint: String
+        var builds: [String: Build]?; var unknown: String?
+    }
+    struct Download: Codable { var url: String; var sha256: String; var files: [String: String] }
+    struct IniEdit: Codable { var file: String; var section: String; var set: [String: String] }
+    struct Proxy: Codable { var dll: String; var def: String }
+    struct Install: Codable {
+        var exclude: [String]?; var rename: [String: String]?; var downloads: [Download]?
+        var ini: [IniEdit]?; var proxy: Proxy?; var appIcon: String?; var exeIcon: String?
+    }
+    struct Variant: Codable { var label: String; var exe: String; var args: [String]? }
+    struct Window: Codable {
+        var mode: String; var align: Int?; var backdrop: Bool?; var menubar: String?; var title: String?
+    }
+    struct Launch: Codable {
+        var variants: [Variant]; var window: Window; var ini: [IniEdit]?
+        var env: [String: String]?; var dllOverrides: [String: String]?
+    }
+    var schema: Int; var title: String; var bundleId: String; var engine: String
+    var detect: Detect; var install: Install?; var launch: Launch
+}
+
+func isHex(_ s: String, _ n: Int) -> Bool { s.count == n && s.allSatisfy { $0.isHexDigit && !$0.isUppercase } }
+func isSafeRelative(_ p: String) -> Bool {
+    !p.isEmpty && !p.hasPrefix("/") && !p.split(separator: "/").contains("..")
+}
+
+/// Every problem in a recipe, as readable lines; empty means valid.
+func checkRecipe(_ url: URL) -> [String] {
+    var errors: [String] = []
+    guard let data = try? Data(contentsOf: url),
+          let json = try? JSONSerialization.jsonObject(with: data) else { return ["not valid JSON: \(url.path)"] }
+    func walk(_ v: Any, _ path: String, _ shape: String) {
+        if let d = v as? [String: Any] {
+            if recipeMaps.contains(shape) {
+                if shape == "detect.builds" { for (k, b) in d { walk(b, "\(path).\(k)", "detect.builds.*") } }
+                return
+            }
+            guard let allowed = recipeKeys[shape] else { return }
+            for (k, child) in d {
+                let childShape = shape.isEmpty ? k : "\(shape).\(k)"
+                if !allowed.contains(k) { errors.append("unknown key \"\(k)\" in \(path.isEmpty ? "the recipe" : path)") }
+                else { walk(child, path.isEmpty ? k : "\(path).\(k)", childShape) }
+            }
+        } else if let a = v as? [Any] {
+            for (i, e) in a.enumerated() { walk(e, "\(path)[\(i)]", "\(shape)[]") }
+        }
+    }
+    walk(json, "", "")
+    let recipe: Recipe
+    do { recipe = try JSONDecoder().decode(Recipe.self, from: data) }
+    catch { return errors + ["does not match the schema: \(error)"] }
+    if recipe.schema != 1 { errors.append("schema must be 1") }
+    if recipe.detect.required.isEmpty { errors.append("detect.required is empty") }
+    for p in recipe.detect.required + [recipe.detect.fingerprint] where !isSafeRelative(p) {
+        errors.append("not a relative path inside the game: \(p)")
+    }
+    for (md5, b) in recipe.detect.builds ?? [:] {
+        if !isHex(md5, 32) { errors.append("detect.builds key is not a lowercase md5: \(md5)") }
+        if !["verified", "unverified", "refuse"].contains(b.status) { errors.append("build \(md5): status must be verified, unverified or refuse") }
+        if b.status == "refuse" && (b.message ?? "").isEmpty { errors.append("build \(md5): refuse needs a message") }
+    }
+    if let u = recipe.detect.unknown, !["warn", "refuse"].contains(u) { errors.append("detect.unknown must be warn or refuse") }
+    for d in recipe.install?.downloads ?? [] {
+        if !(d.url.hasPrefix("https://") || d.url.hasPrefix("file://")) { errors.append("download url must be https:// or file://: \(d.url)") }
+        if !d.url.lowercased().hasSuffix(".zip") { errors.append("only .zip downloads are supported: \(d.url)") }
+        if !isHex(d.sha256, 64) { errors.append("download sha256 is not 64 lowercase hex: \(d.url)") }
+        for (from, to) in d.files where !isSafeRelative(from) || !isSafeRelative(to) { errors.append("download files entry is not relative: \(from) -> \(to)") }
+    }
+    for (from, to) in recipe.install?.rename ?? [:] where !isSafeRelative(from) || !isSafeRelative(to) {
+        errors.append("rename entry is not relative: \(from) -> \(to)")
+    }
+    if let p = recipe.install?.proxy {
+        if !FileManager.default.fileExists(atPath: url.deletingLastPathComponent().appendingPathComponent(p.def).path) {
+            errors.append("proxy def not found next to the recipe: \(p.def)")
+        }
+        if !p.dll.lowercased().hasSuffix(".dll") || !isSafeRelative(p.dll) { errors.append("proxy dll must be a .dll inside the game: \(p.dll)") }
+    }
+    if recipe.launch.variants.isEmpty { errors.append("launch.variants is empty") }
+    for v in recipe.launch.variants where !isSafeRelative(v.exe) { errors.append("variant exe is not relative: \(v.exe)") }
+    let mode = recipe.launch.window.mode
+    if mode != "native" {
+        let p = mode.split(separator: ":")
+        if !(p.count == 3 && p[0] == "pillarbox" && Int(p[1]) ?? 0 > 0 && Int(p[2]) ?? 0 > 0) {
+            errors.append("launch.window.mode must be native or pillarbox:<w>:<h>: \(mode)")
+        }
+    }
+    if let m = recipe.launch.window.menubar, !["hide", "keep"].contains(m) { errors.append("launch.window.menubar must be hide or keep") }
+    return errors
+}
+
+func loadRecipe(_ url: URL) throws -> Recipe {
+    let errors = checkRecipe(url)
+    guard errors.isEmpty else { throw PEError(message: "invalid recipe \(url.path):\n  " + errors.joined(separator: "\n  ")) }
+    return try JSONDecoder().decode(Recipe.self, from: Data(contentsOf: url))
+}
+
+// MARK: - INI files
+
+/// Set keys in one section of an INI file, keeping its line endings. Keys match
+/// case-insensitively; missing keys go at the end of the section, a missing
+/// section at the end of the file. Returns whether the file changed.
+@discardableResult
+func iniSet(_ url: URL, section: String, _ values: [String: String]) throws -> Bool {
+    let original = (try? String(contentsOf: url, encoding: .isoLatin1)) ?? ""
+    let eol = original.contains("\r\n") ? "\r\n" : "\n"
+    var lines = original.isEmpty ? [] : original.components(separatedBy: eol)
+    if lines.last == "" { lines.removeLast() }
+    func header(_ l: String) -> String? {
+        let t = l.trimmingCharacters(in: .whitespaces)
+        return t.hasPrefix("[") && t.hasSuffix("]") ? String(t.dropFirst().dropLast()) : nil
+    }
+    var remaining = values
+    var start: Int? = lines.firstIndex { header($0)?.caseInsensitiveCompare(section) == .orderedSame }
+    if start == nil {
+        lines.append("[\(section)]"); start = lines.count - 1
+    }
+    var end = lines.count
+    for i in (start! + 1)..<lines.count where header(lines[i]) != nil { end = i; break }
+    for i in (start! + 1)..<end {
+        guard let eq = lines[i].firstIndex(of: "=") else { continue }
+        let key = lines[i][..<eq].trimmingCharacters(in: .whitespaces)
+        if let match = remaining.keys.first(where: { $0.caseInsensitiveCompare(key) == .orderedSame }) {
+            lines[i] = "\(key)=\(remaining[match]!)"
+            remaining.removeValue(forKey: match)
+        }
+    }
+    var insertAt = end
+    while insertAt > start! + 1 && lines[insertAt - 1].trimmingCharacters(in: .whitespaces).isEmpty { insertAt -= 1 }
+    for k in remaining.keys.sorted() { lines.insert("\(k)=\(remaining[k]!)", at: insertAt); insertAt += 1 }
+    let updated = lines.joined(separator: eol) + eol
+    guard updated != original else { return false }
+    try updated.write(to: url, atomically: true, encoding: .isoLatin1)
+    return true
+}
+
+// MARK: - fetch (build time)
+
+func run(_ tool: String, _ args: [String]) throws {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: tool)
+    p.arguments = args
+    try p.run(); p.waitUntilExit()
+    guard p.terminationStatus == 0 else { throw PEError(message: "\(tool) failed (\(p.terminationStatus))") }
+}
+
+func sha256(_ url: URL) throws -> String {
+    SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
+}
+
+/// Download (or reuse from the cache), verify and unpack each pinned download,
+/// then copy the mapped files into `out`.
+func fetch(recipeDir: URL, cache: URL, out: URL) throws {
+    let recipe = try loadRecipe(recipeDir.appendingPathComponent("recipe.json"))
+    let fm = FileManager.default
+    try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+    try fm.createDirectory(at: out, withIntermediateDirectories: true)
+    for d in recipe.install?.downloads ?? [] {
+        let archive = cache.appendingPathComponent("\(d.sha256).zip")
+        let cached = fm.fileExists(atPath: archive.path) ? try sha256(archive) : ""
+        if cached != d.sha256 {
+            print("==> downloading \(d.url)")
+            let part = archive.appendingPathExtension("part")
+            try run("/usr/bin/curl", ["-fsSL", "-o", part.path, d.url])
+            try? fm.removeItem(at: archive)
+            try fm.moveItem(at: part, to: archive)
+        }
+        guard try sha256(archive) == d.sha256 else {
+            try? fm.removeItem(at: archive)
+            throw PEError(message: "checksum mismatch for \(d.url)")
+        }
+        let unpacked = cache.appendingPathComponent(d.sha256)
+        if !fm.fileExists(atPath: unpacked.path) {
+            try run("/usr/bin/ditto", ["-x", "-k", archive.path, unpacked.path])
+        }
+        for (from, to) in d.files {
+            let src = unpacked.appendingPathComponent(from), dst = out.appendingPathComponent(to)
+            guard fm.fileExists(atPath: src.path) else { throw PEError(message: "\(from) is not in \(d.url)") }
+            try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.removeItem(at: dst)
+            try fm.copyItem(at: src, to: dst)
+        }
+    }
+}
+
+// MARK: - install
+
+/// Names a PE file exports, for checking a proxy's .def against the real DLL.
+func exportNames(_ pe: PEFile) -> Set<String> {
+    guard pe.dataDirectories.count > 0, pe.dataDirectories[0].rva != 0,
+          let e = pe.offset(ofRVA: pe.dataDirectories[0].rva) else { return [] }
+    let count = Int(pe.data.u32(e + 24)), namesRVA = pe.data.u32(e + 32)
+    guard let names = pe.offset(ofRVA: namesRVA) else { return [] }
+    return Set((0..<min(count, 65536)).compactMap { pe.cString(atRVA: pe.data.u32(names + 4 * $0)) })
+}
+
+func defNames(_ url: URL) throws -> Set<String> {
+    Set(try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n").compactMap { line in
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("\""), let close = t.dropFirst().firstIndex(of: "\"") else { return nil }
+        return String(t[t.index(after: t.startIndex)..<close])
+    })
+}
+
+struct InstallRefused: Error { let message: String }
+
+/// Copy the player's game from `source` into `game` and apply the recipe. Nothing
+/// in `source` is ever written. Files already in `game` are not overwritten (the
+/// player's saves and our edits survive a re-run), so a second run changes nothing.
+/// Returns the number of changes made.
+func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int {
+    let recipe = try loadRecipe(recipeDir.appendingPathComponent("recipe.json"))
+    let files = recipeDir.appendingPathComponent("files")
+    let fm = FileManager.default
+    var changes = 0
+    func note(_ s: String) { print("==> \(s)"); changes += 1 }
+
+    // 1. which build is this
+    for r in recipe.detect.required where !fm.fileExists(atPath: source.appendingPathComponent(r).path) {
+        throw InstallRefused(message: "\(r) is missing: this does not look like a \(recipe.title) folder")
+    }
+    let fingerprint = md5(try Data(contentsOf: source.appendingPathComponent(recipe.detect.fingerprint)))
+    let build = recipe.detect.builds?[fingerprint]
+    switch build?.status {
+    case "refuse": throw InstallRefused(message: build?.message ?? "this build is not supported")
+    case "verified": print("build: \(build?.label ?? fingerprint) (verified)")
+    case "unverified": print("warning: build \(build?.label ?? fingerprint) has not been tested")
+    default:
+        if recipe.detect.unknown == "refuse" { throw InstallRefused(message: "unknown build \(fingerprint)") }
+        print("warning: unknown build \(fingerprint) of \(recipe.detect.fingerprint): not tested")
+    }
+
+    // 2. copy the game (never overwriting; renamed and proxied files count as present)
+    let excluded = Set((recipe.install?.exclude ?? []).map { $0.lowercased() })
+    let renames = recipe.install?.rename ?? [:]
+    let proxyDLL = recipe.install?.proxy?.dll
+    try fm.createDirectory(at: game, withIntermediateDirectories: true)
+    let src = source.resolvingSymlinksInPath()
+    var copied = 0
+    if let walker = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
+        for case let url as URL in walker {
+            let rel = String(url.resolvingSymlinksInPath().path.dropFirst(src.path.count + 1))
+            if excluded.contains(String(rel.split(separator: "/").first ?? "").lowercased()) {
+                walker.skipDescendants(); continue
+            }
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if values.isSymbolicLink == true { continue }
+            let dst = game.appendingPathComponent(rel)
+            if values.isDirectory == true {
+                try fm.createDirectory(at: dst, withIntermediateDirectories: true); continue
+            }
+            if fm.fileExists(atPath: dst.path) { continue }
+            if let to = renames[rel], fm.fileExists(atPath: game.appendingPathComponent(to).path) { continue }
+            try fm.copyItem(at: url, to: dst); copied += 1
+        }
+    }
+    if copied > 0 { note("copied \(copied) files") }
+
+    // 3. renames (e.g. set a bundled wrapper DLL aside)
+    for (from, to) in renames.sorted(by: { $0.key < $1.key }) {
+        let a = game.appendingPathComponent(from), b = game.appendingPathComponent(to)
+        if fm.fileExists(atPath: a.path) && !fm.fileExists(atPath: b.path) {
+            try fm.moveItem(at: a, to: b); note("renamed \(from) -> \(to)")
+        }
+    }
+
+    // 4. the proxy DLL: the original becomes <name>_orig.dll
+    if let proxy = recipe.install?.proxy {
+        let dll = game.appendingPathComponent(proxy.dll)
+        let stem = (proxy.dll as NSString).deletingPathExtension
+        let orig = game.appendingPathComponent(stem + "_orig.dll")
+        let ours = files.appendingPathComponent(proxy.dll)
+        guard fm.fileExists(atPath: ours.path) else { throw PEError(message: "the app was built without the \(proxy.dll) proxy") }
+        if !fm.fileExists(atPath: orig.path) {
+            guard fm.fileExists(atPath: dll.path) else { throw InstallRefused(message: "\(proxy.dll) is missing") }
+            let wanted = try defNames(recipeDir.appendingPathComponent(proxy.def))
+            let have = exportNames(try PEFile(data: Data(contentsOf: dll)))
+            guard wanted == have else {
+                throw InstallRefused(message: "\(proxy.dll) in this copy exports something else than the recipe's \(proxy.def)")
+            }
+            try fm.moveItem(at: dll, to: orig); note("kept the original \(proxy.dll) as \(stem)_orig.dll")
+        }
+        let current = fm.fileExists(atPath: dll.path) ? md5(try Data(contentsOf: dll)) : ""
+        if current != md5(try Data(contentsOf: ours)) {
+            try? fm.removeItem(at: dll)
+            try fm.copyItem(at: ours, to: dll); note("installed the \(proxy.dll) proxy")
+        }
+    }
+
+    // 5. files from the recipe's downloads (built into the app), replacing what differs
+    if let walker = fm.enumerator(at: files, includingPropertiesForKeys: [.isDirectoryKey]) {
+        for case let url as URL in walker {
+            let rel = String(url.resolvingSymlinksInPath().path.dropFirst(files.resolvingSymlinksInPath().path.count + 1))
+            if rel == proxyDLL { continue }
+            let dst = game.appendingPathComponent(rel)
+            if (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory == true {
+                try fm.createDirectory(at: dst, withIntermediateDirectories: true); continue
+            }
+            if fm.fileExists(atPath: dst.path), md5(try Data(contentsOf: dst)) == md5(try Data(contentsOf: url)) { continue }
+            try? fm.removeItem(at: dst)
+            try fm.copyItem(at: url, to: dst); note("added \(rel)")
+        }
+    }
+
+    // 6. INI edits
+    for edit in recipe.install?.ini ?? [] {
+        if try iniSet(game.appendingPathComponent(edit.file), section: edit.section, edit.set) {
+            note("set \(edit.set.keys.sorted().joined(separator: ", ")) in \(edit.file)")
+        }
+    }
+
+    // 7. icons: the app icon, and the same icon inside the running exe (for the Dock)
+    if let from = recipe.install?.appIcon {
+        let icns = iconDir.appendingPathComponent("AppIcon.icns")
+        if !fm.fileExists(atPath: icns.path) {
+            try makeIcons(exe: game.appendingPathComponent(from), out: iconDir); note("made the app icon from \(from)")
+        }
+    }
+    if let target = recipe.install?.exeIcon {
+        let exe = game.appendingPathComponent(target), bkp = game.appendingPathComponent(target + ".bkp")
+        if !fm.fileExists(atPath: bkp.path) {
+            try fm.copyItem(at: exe, to: bkp)
+            do {
+                try patchExeIcon(exe: bkp, pngDir: iconDir, out: exe); note("put the icon into \(target) (stock kept as \(target).bkp)")
+            } catch let e as RefusedError {
+                print("warning: \(target) keeps its own icon: \(e.message)")
+            }
+        }
+    }
+
+    // 8. what was installed, for the launcher and for a re-install
+    let stamp = try JSONSerialization.data(withJSONObject: [
+        "recipe": recipe.title, "fingerprint": fingerprint, "build": build?.status ?? "unknown",
+    ], options: [.prettyPrinted, .sortedKeys])
+    let stampURL = game.appendingPathComponent(".kitchen-install.json")
+    if (try? Data(contentsOf: stampURL)) != stamp { try stamp.write(to: stampURL); note("wrote .kitchen-install.json") }
+    return changes
+}
+
 // MARK: - main
 
 func fail(_ message: String) -> Never {
@@ -801,6 +1169,33 @@ case "frame":
 case "menubar":
     guard args.count == 4 else { fail("usage: kitchen menubar hide|restore <marker>") }
     do { try menubar(args[2], marker: args[3]) } catch { fail("kitchen menubar: \(error)") }
+case "recipe-check":
+    guard args.count == 3 else { fail("usage: kitchen recipe-check <recipe.json>") }
+    let errors = checkRecipe(URL(fileURLWithPath: args[2]))
+    if errors.isEmpty { print("recipe ok: \(args[2])") }
+    else { fail("recipe-check \(args[2]):\n  " + errors.joined(separator: "\n  ")) }
+case "fetch":
+    guard args.count == 5 else { fail("usage: kitchen fetch <recipe-dir> <cache> <out>") }
+    do { try fetch(recipeDir: URL(fileURLWithPath: args[2]), cache: URL(fileURLWithPath: args[3]), out: URL(fileURLWithPath: args[4])) }
+    catch { fail("kitchen fetch: \(error)") }
+case "install":
+    guard args.count == 6 else { fail("usage: kitchen install <recipe-dir> <source> <game-dir> <icon-dir>") }
+    do {
+        let n = try install(recipeDir: URL(fileURLWithPath: args[2]), source: URL(fileURLWithPath: args[3]),
+                            game: URL(fileURLWithPath: args[4]), iconDir: URL(fileURLWithPath: args[5]))
+        print(n == 0 ? "already installed: nothing to change" : "installed: \(n) changes")
+    } catch let e as InstallRefused {
+        FileHandle.standardError.write("kitchen install: refused: \(e.message)\n".data(using: .utf8)!)
+        exit(3)
+    } catch { fail("kitchen install: \(error)") }
+case "ini-set":
+    guard args.count >= 5 else { fail("usage: kitchen ini-set <file> <section> key=value...") }
+    var values: [String: String] = [:]
+    for kv in args.dropFirst(4) {
+        guard let eq = kv.firstIndex(of: "=") else { fail("kitchen ini-set: not key=value: \(kv)") }
+        values[String(kv[..<eq])] = String(kv[kv.index(after: eq)...])
+    }
+    do { try iniSet(URL(fileURLWithPath: args[2]), section: args[3], values) } catch { fail("kitchen ini-set: \(error)") }
 default:
-    fail("usage: kitchen scan | icon | exe-icon | displays | geometry | frame | menubar (see the header of tools/kitchen.swift)")
+    fail("usage: kitchen scan | icon | exe-icon | displays | geometry | frame | menubar | recipe-check | fetch | install | ini-set (see the header of tools/kitchen.swift)")
 }

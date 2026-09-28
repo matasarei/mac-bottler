@@ -165,5 +165,99 @@ win/proxy.sh def "$X/x64.dll" >/dev/null 2>&1; rc=$?
 expect "64-bit DLLs are refused" "1" "$rc"
 if i686-w64-mingw32-gcc -O2 -mwindows -o "$X/kitchen-place.exe" win/place.c 2>/dev/null; then ok; else bad "place.c builds"; fi
 
+# --- recipes: check, fetch, install on a fake game built here
+R="$T/recipe"; SRC="$R/source"; mkdir -p "$SRC/saves" "$R/recipe" "$R/zip/mod/sub"
+pe "$SRC/Game.exe" --size 300000 --imports KERNEL32.dll,USER32.dll,DDRAW.dll --icons 16,24,32,48,64
+cp "$X/fake.dll" "$SRC/sound.dll"
+pe "$SRC/ddraw.dll" --imports KERNEL32.dll
+touch "$SRC/secdrv.sys"
+printf '[Game]\r\nMode=1\r\nName=test\r\n\r\n[Other]\r\nx=1\r\n' > "$SRC/Game.ini"
+echo "my save" > "$SRC/saves/slot1.sav"
+echo "mod v1" > "$R/zip/mod/readme.txt"; echo "data" > "$R/zip/mod/sub/data.txt"
+(cd "$R/zip" && zip -qr ../mod.zip mod)
+ZIPSHA=$(shasum -a 256 "$R/mod.zip" | cut -d' ' -f1)
+GAMEMD5=$(md5 -q "$SRC/Game.exe")
+win/proxy.sh def "$SRC/sound.dll" > "$R/recipe/sound.def"
+write_recipe() {  # write_recipe <status for the game's md5> [extra top-level json]
+cat > "$R/recipe/recipe.json" <<JSON
+{
+  "schema": 1, "title": "Test Game", "bundleId": "com.example.test", "engine": "crossover-23",
+  "detect": { "required": ["Game.exe"], "fingerprint": "Game.exe",
+              "builds": { "$GAMEMD5": { "status": "$1", "label": "fixture", "message": "not this one" } } },
+  "install": {
+    "exclude": ["secdrv.sys"],
+    "rename": { "ddraw.dll": "ddraw.dll.gog" },
+    "downloads": [ { "url": "file://$PWD/$R/mod.zip", "sha256": "$ZIPSHA",
+                     "files": { "mod/readme.txt": "readme.txt", "mod/sub": "extra" } } ],
+    "ini": [ { "file": "Game.ini", "section": "Game", "set": { "Mode": "0", "Added": "yes" } } ],
+    "proxy": { "dll": "sound.dll", "def": "sound.def" },
+    "appIcon": "Game.exe", "exeIcon": "Game.exe"
+  },
+  "launch": { "variants": [ { "label": "Play", "exe": "Game.exe", "args": [] } ],
+              "window": { "mode": "pillarbox:4:3", "align": 8 } }${2:-}
+}
+JSON
+}
+write_recipe verified
+if "$T/kitchen" recipe-check "$R/recipe/recipe.json" >/dev/null; then ok; else bad "valid recipe passes recipe-check"; fi
+if "$T/kitchen" fetch "$R/recipe" "$R/cache" "$R/recipe/files" >/dev/null; then ok; else bad "fetch exits 0"; fi
+expect "fetch copies a mapped file" "mod v1" "$(cat "$R/recipe/files/readme.txt" 2>/dev/null)"
+expect "fetch copies a mapped folder" "data" "$(cat "$R/recipe/files/extra/data.txt" 2>/dev/null)"
+win/proxy.sh build "$R/recipe/sound.def" "$R/recipe/files/sound.dll" 2>/dev/null
+tree_md5() { (cd "$1" && find . -type f | LC_ALL=C sort | xargs md5 -q | md5 -q); }
+BEFORE=$(tree_md5 "$SRC")
+G="$R/game"; ICONS="$R/icons"
+OUT=$("$T/kitchen" install "$R/recipe" "$SRC" "$G" "$ICONS"); rc=$?
+expect "install exits 0" "0" "$rc"
+expect "source folder untouched" "$BEFORE" "$(tree_md5 "$SRC")"
+if [ ! -e "$G/secdrv.sys" ]; then ok; else bad "excluded file not copied"; fi
+if [ -e "$G/ddraw.dll.gog" ] && [ ! -e "$G/ddraw.dll" ]; then ok; else bad "ddraw.dll renamed aside"; fi
+expect "original DLL kept as _orig" "$(md5 -q "$SRC/sound.dll")" "$(md5 -q "$G/sound_orig.dll" 2>/dev/null)"
+expect "proxy DLL installed" "$(md5 -q "$R/recipe/files/sound.dll")" "$(md5 -q "$G/sound.dll" 2>/dev/null)"
+expect "download files added" "mod v1" "$(cat "$G/readme.txt" 2>/dev/null)"
+expect "ini key set, CRLF kept, new key added in its section" \
+    "$(printf '[Game]\r\nMode=0\r\nName=test\r\nAdded=yes\r\n\r\n[Other]\r\nx=1\r\n')" "$(cat "$G/Game.ini")"
+if [ -s "$ICONS/AppIcon.icns" ]; then ok; else bad "app icon made"; fi
+expect "stock exe kept as .bkp" "$GAMEMD5" "$(md5 -q "$G/Game.exe.bkp" 2>/dev/null)"
+if [ "$(md5 -q "$G/Game.exe")" != "$GAMEMD5" ] && [ "$(stat -f %z "$G/Game.exe")" = "$(stat -f %z "$SRC/Game.exe")" ]; then ok; else bad "exe icon patched in place"; fi
+expect "install stamp written" "verified" "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['build'])" "$G/.kitchen-install.json" 2>/dev/null)"
+echo "played" >> "$G/saves/slot1.sav"
+AFTER=$(tree_md5 "$G")
+OUT=$("$T/kitchen" install "$R/recipe" "$SRC" "$G" "$ICONS")
+expect "second install changes nothing" "already installed: nothing to change" "$(echo "$OUT" | tail -1)"
+expect "second install keeps every file (saves too)" "$AFTER" "$(tree_md5 "$G")"
+
+write_recipe refuse
+"$T/kitchen" install "$R/recipe" "$SRC" "$R/game-refused" "$R/icons2" >/dev/null 2>&1; rc=$?
+if [ $rc -eq 3 ] && [ ! -e "$R/game-refused/Game.exe" ]; then ok; else bad "refused build: exit 3 and nothing copied, got $rc"; fi
+sed -i '' "s/$GAMEMD5/00000000000000000000000000000000/" "$R/recipe/recipe.json"
+sed -i '' 's/"fingerprint": "Game.exe",/"fingerprint": "Game.exe", "unknown": "refuse",/' "$R/recipe/recipe.json"
+"$T/kitchen" install "$R/recipe" "$SRC" "$R/game-unknown" "$R/icons3" >/dev/null 2>&1; rc=$?
+expect "unknown build with unknown=refuse exits 3" "3" "$rc"
+write_recipe verified ', "tittle": "typo"'
+MSG=$("$T/kitchen" recipe-check "$R/recipe/recipe.json" 2>&1); rc=$?
+if [ $rc -eq 2 ] && echo "$MSG" | grep -q 'unknown key "tittle"'; then ok; else bad "typo'd key is rejected by name"; fi
+write_recipe verified
+printf 'LIBRARY sound.dll\nEXPORTS\n  "other" = sound_orig."other" @1\n' > "$R/recipe/sound.def"
+"$T/kitchen" install "$R/recipe" "$SRC" "$R/game-baddef" "$R/icons4" >/dev/null 2>&1; rc=$?
+expect "proxy .def not matching the DLL is refused" "3" "$rc"
+sed -i '' "s/$ZIPSHA/$(printf '%064d' 0)/" "$R/recipe/recipe.json"
+"$T/kitchen" fetch "$R/recipe" "$R/cache-bad" "$R/files-bad" >/dev/null 2>&1; rc=$?
+expect "wrong download checksum fails fetch" "2" "$rc"
+
+# core/install.sh on a fake app layout
+A="$T/app/Contents/Resources"; mkdir -p "$A/bin" "$A/prefix/drive_c"
+cp "$T/kitchen" "$A/bin/"; write_recipe verified; win/proxy.sh def "$SRC/sound.dll" > "$R/recipe/sound.def"
+cp -R "$R/recipe" "$A/recipe"
+if bash core/install.sh "$A" "$SRC" >/dev/null; then ok; else bad "core/install.sh exits 0"; fi
+if [ -e "$A/prefix/drive_c/Game/Game.exe" ] && [ "$(readlink "$A/prefix/drive_c/Game")" = "../../game" ]; then ok; else bad "C:\\Game is a relative link to Resources/game"; fi
+if [ -s "$A/icon/AppIcon.icns" ]; then ok; else bad "install.sh icons go to Resources/icon"; fi
+bash core/install.sh "$A" "$T/does-not-exist" >/dev/null 2>&1; rc=$?
+expect "install.sh: missing source exits 2" "2" "$rc"
+
+# ini-set on a new file and a missing section
+"$T/kitchen" ini-set "$T/new.ini" Main a=1 b=2
+expect "ini-set creates file and section" "$(printf '[Main]\na=1\nb=2\n')" "$(cat "$T/new.ini")"
+
 echo "tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
