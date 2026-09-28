@@ -3,6 +3,22 @@
 How things work, and what was already tried. Each entry names the game it was
 found on; the lesson is written so it applies to other games too.
 
+## Engines
+
+- **Every wine call needs the same environment** (`core/wine-env.sh`): an
+  absolute `WINEPREFIX` (wine refuses a relative one), `HOME` inside the bundle,
+  and `DYLD_FALLBACK_LIBRARY_PATH` including the runtime's `lib/external`. The
+  WoWSilicon runtime bundles FreeType there but loads it by name; without the
+  path, wine reports "cannot find the FreeType font library" and GDI games lose
+  their TrueType text (WoW draws its own fonts, so wow-launcher never noticed).
+- **WoWSilicon Wine 11 (r17) vs CrossOver 23, Alpha Centauri + Thinker, main
+  menu, 2026-09-28:** starts, sizes and centres fine, but the game used ~104% CPU
+  (focused; ~57% unfocused) plus ~48% for wineserver, against ~10% + 2% on
+  CrossOver 23. `WINEMSYNC=1` (supported by the runtime, off by default) made no
+  difference. Sound crackled on both the MacBook speakers (already at 48 kHz) and
+  AirPods. Unproven guess: Thinker's idle fix does not take effect on this Wine,
+  and the spinning loop also starves the audio mixer.
+
 ## Display
 
 - **winemac.drv has no virtual desktop.** The Wine "Explorer\Desktops" setting is
