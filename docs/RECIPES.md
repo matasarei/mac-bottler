@@ -4,7 +4,6 @@ A recipe is a folder `recipes/<game>/` with:
 
 - `recipe.json`: how the game is detected, installed and launched (schema below);
 - `notes.md`: what was tried on this game and why, including what failed;
-- any file the recipe names, e.g. a proxy DLL's `.def` (`win/proxy.sh def`).
 
 It is the only place anything game-specific lives. `bottler recipe-check
 recipes/<game>/recipe.json` validates it; unknown keys are errors, so a typo fails
@@ -47,7 +46,7 @@ the build instead of the game.
     "ini": [
       { "file": "Alpha Centauri.Ini", "section": "Alpha Centauri", "set": { "DirectDraw": "0" } }
     ],
-    "proxy": { "dll": "soundx.dll", "def": "soundx.def" },
+    "proxy": { "dll": "soundx.dll" },
     "appIcon": "terran.exe",
     "exeIcon": "terranx.exe"
   },
@@ -81,7 +80,7 @@ the build instead of the game.
 | `install.rename` | game-folder file → new name, when it exists (e.g. set a bundled wrapper aside) |
 | `install.downloads` | pinned archives fetched at build time: `url`, `sha256`, and `files` mapping a path inside the archive to a path in the game folder. Zip only for now. |
 | `install.ini` | INI edits applied at install; the section is created and keys added when missing; CRLF files stay CRLF |
-| `install.proxy` | `dll` in the game folder is renamed `<name>_orig.dll` and replaced by a proxy built from `def` (a `.def` in the recipe folder, from `win/proxy.sh def`); the original's exports must match the `.def` |
+| `install.proxy` | `dll` in the game folder is renamed `<name>_orig.dll` and replaced by a proxy forwarding every export to it. The export list is read from the project's own copy of the DLL at build time (`win/proxy.sh def`), so nothing derived from the game is in the repo. |
 | `install.appIcon` | the exe whose icon becomes the app icon (`bottler icon`) |
 | `install.exeIcon` | the exe that gets that icon written into it in place (`bottler exe-icon`), so the Dock shows it; the stock exe is kept as `<exe>.bkp` |
 | `launch.variants` | what the player can start: `label`, `exe` (relative to the game folder), `args` |

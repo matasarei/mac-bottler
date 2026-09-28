@@ -2,6 +2,18 @@
 # Hermetic tests: synthetic PE files, no game data, no wine. Run with: make test
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# --- the repository itself: nothing that may not be published (docs/THIRD-PARTY.md)
+AUDIT_FAIL=0
+while IFS= read -r f; do
+    case "$(echo "$f" | tr '[:upper:]' '[:lower:]')" in
+        *.exe|*.dll|*.sys|*.icd|*.pcx|*.bmp|*.png|*.jpg|*.ico|*.icns|*.wav|*.mp3|*.ogg|*.flc|*.wve|*.bik|*.cvr|*.sav|*.mpq|*.ttf|*.fon|*.zip|*.7z|*.tar*|*.dmg|*.iso)
+            echo "FAIL: repo tracks a game/media/archive file: $f"; AUDIT_FAIL=1 ;;
+    esac
+    if [ -f "$f" ] && ! grep -Iq . "$f" 2>/dev/null && [ -s "$f" ]; then echo "FAIL: repo tracks a binary file: $f"; AUDIT_FAIL=1; fi
+    if [ -f "$f" ] && [ "$(stat -f %z "$f")" -gt 204800 ]; then echo "FAIL: repo tracks a file over 200 KB: $f"; AUDIT_FAIL=1; fi
+done < <(git ls-files)
+[ "$AUDIT_FAIL" -eq 0 ] || exit 1
+
 command -v python3 >/dev/null && python3 -c "import PIL" 2>/dev/null \
     || { echo "tests need python3 with Pillow (test-only): pip3 install pillow"; exit 1; }
 T="build/test"
@@ -192,7 +204,7 @@ cat > "$R/recipe/recipe.json" <<JSON
     "downloads": [ { "url": "file://$PWD/$R/mod.zip", "sha256": "$ZIPSHA",
                      "files": { "mod/readme.txt": "readme.txt", "mod/sub": "extra" } } ],
     "ini": [ { "file": "Game.ini", "section": "Game", "set": { "Mode": "0", "Added": "yes" } } ],
-    "proxy": { "dll": "sound.dll", "def": "sound.def" },
+    "proxy": { "dll": "sound.dll" },
     "appIcon": "Game.exe", "exeIcon": "Game.exe"
   },
   "launch": { "variants": [ { "label": "Play", "exe": "Game.exe", "args": [] } ],

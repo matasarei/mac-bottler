@@ -35,8 +35,9 @@ will not run Thinker: apply the official 2.0 patch first.
   the menu bar auto-hides while playing.
 - Centring breaks edge scrolling: the game compares `GetCursorPos` (screen
   coordinates) with its window size. The game's own `soundx.dll` (loaded from
-  its folder) is replaced by a proxy (`soundx.def`) that makes the cursor
-  window-relative; the original is kept as `soundx_orig.dll`.
+  its folder) is replaced by a proxy that makes the cursor window-relative; the
+  original is kept as `soundx_orig.dll`. The proxy's export list is read from the
+  player's own `soundx.dll` at build time.
 - A real titled macOS window was tried and abandoned: cnc-ddraw gave one but
   only its GDI renderer drew, text vanished when scaled, and it conflicts with
   Thinker; patching the game's CreateWindowEx style gave a title bar but clipped

@@ -29,7 +29,6 @@ TITLE="$("$BOTTLER" recipe-field "$RECIPE/recipe.json" title)"
 BUNDLE_ID="$("$BOTTLER" recipe-field "$RECIPE/recipe.json" bundleId)"
 ENGINE="$("$BOTTLER" recipe-field "$RECIPE/recipe.json" engine)"
 PROXY_DLL="$("$BOTTLER" recipe-field "$RECIPE/recipe.json" proxy.dll)"
-PROXY_DEF="$("$BOTTLER" recipe-field "$RECIPE/recipe.json" proxy.def)"
 APP="$PROJ/$TITLE.app"
 NEW="$WORK/$TITLE.app"
 rm -rf "$NEW"
@@ -87,8 +86,11 @@ echo "==> recipe"
 cp -R "$RECIPE" "$RES/recipe"
 with_lock downloads "$BOTTLER" fetch "$RES/recipe" "$CACHE/downloads" "$RES/recipe/files"
 if [ -n "$PROXY_DLL" ]; then
+    # the export list comes from the project's own copy of the DLL, never from the repo
     echo "==> proxy $PROXY_DLL"
-    win/proxy.sh build "$RES/recipe/$PROXY_DEF" "$RES/recipe/files/$PROXY_DLL"
+    DEF="$RES/recipe/${PROXY_DLL%.*}.def"
+    win/proxy.sh def "$GAME_SRC/$PROXY_DLL" > "$DEF"
+    win/proxy.sh build "$DEF" "$RES/recipe/files/$PROXY_DLL"
 fi
 
 echo "==> helpers and launcher"

@@ -16,7 +16,7 @@
 //   bottler menubar hide|restore <marker>    auto-hide the menu bar while playing
 //   bottler recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
 //   bottler recipe-field <recipe.json> <field>   one value for the build: title,
-//                                            bundleId, engine, proxy.dll, proxy.def
+//                                            bundleId, engine, proxy.dll
 //   bottler fetch <recipe-dir> <cache> <out> build time: pinned downloads into <out>
 //   bottler install <recipe-dir> <source> <game-dir> <icon-dir>
 //                                            copy the player's game and apply the recipe
@@ -786,7 +786,7 @@ let recipeKeys: [String: Set<String>] = [
     "install": ["exclude", "rename", "downloads", "ini", "proxy", "appIcon", "exeIcon"],
     "install.downloads[]": ["url", "sha256", "files"],
     "install.ini[]": ["file", "section", "set"],
-    "install.proxy": ["dll", "def"],
+    "install.proxy": ["dll"],
     "launch": ["variants", "window", "ini", "env", "dllOverrides"],
     "launch.variants[]": ["label", "exe", "args"],
     "launch.window": ["mode", "align", "backdrop", "menubar", "title"],
@@ -804,7 +804,7 @@ struct Recipe: Codable {
     }
     struct Download: Codable { var url: String; var sha256: String; var files: [String: String] }
     struct IniEdit: Codable { var file: String; var section: String; var set: [String: String] }
-    struct Proxy: Codable { var dll: String; var def: String }
+    struct Proxy: Codable { var dll: String }
     struct Install: Codable {
         var exclude: [String]?; var rename: [String: String]?; var downloads: [Download]?
         var ini: [IniEdit]?; var proxy: Proxy?; var appIcon: String?; var exeIcon: String?
@@ -872,9 +872,6 @@ func checkRecipe(_ url: URL) -> [String] {
         errors.append("rename entry is not relative: \(from) -> \(to)")
     }
     if let p = recipe.install?.proxy {
-        if !FileManager.default.fileExists(atPath: url.deletingLastPathComponent().appendingPathComponent(p.def).path) {
-            errors.append("proxy def not found next to the recipe: \(p.def)")
-        }
         if !p.dll.lowercased().hasSuffix(".dll") || !isSafeRelative(p.dll) { errors.append("proxy dll must be a .dll inside the game: \(p.dll)") }
     }
     if recipe.launch.variants.isEmpty { errors.append("launch.variants is empty") }
@@ -1099,10 +1096,12 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
         guard fm.fileExists(atPath: ours.path) else { throw PEError(message: "the app was built without the \(proxy.dll) proxy") }
         if !fm.fileExists(atPath: orig.path) {
             guard fm.fileExists(atPath: dll.path) else { throw InstallRefused(message: "\(proxy.dll) is missing") }
-            let wanted = try defNames(recipeDir.appendingPathComponent(proxy.def))
+            // written at build time from the project's own copy of the DLL (win/proxy.sh def)
+            let def = recipeDir.appendingPathComponent(stem + ".def")
+            let wanted = try defNames(def)
             let have = exportNames(try PEFile(data: Data(contentsOf: dll)))
             guard wanted == have else {
-                throw InstallRefused(message: "\(proxy.dll) in this copy exports something else than the recipe's \(proxy.def)")
+                throw InstallRefused(message: "\(proxy.dll) in this copy exports something else than the app was built for (\(stem).def)")
             }
             try fm.moveItem(at: dll, to: orig); note("kept the original \(proxy.dll) as \(stem)_orig.dll")
         }
@@ -1385,7 +1384,6 @@ case "recipe-field":
         case "bundleId": print(r.bundleId)
         case "engine": print(r.engine)
         case "proxy.dll": print(r.install?.proxy?.dll ?? "")
-        case "proxy.def": print(r.install?.proxy?.def ?? "")
         default: fail("bottler recipe-field: unknown field \(args[3])")
         }
     } catch { fail("bottler recipe-field: \(error)") }

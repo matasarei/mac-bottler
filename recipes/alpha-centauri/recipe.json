@@ -39,7 +39,7 @@
                  "Latest Save": "" }
       }
     ],
-    "proxy": { "dll": "soundx.dll", "def": "soundx.def" },
+    "proxy": { "dll": "soundx.dll" },
     "appIcon": "terran.exe",
     "exeIcon": "terranx.exe"
   },
