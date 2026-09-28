@@ -119,5 +119,32 @@ if [ $rc -eq 2 ]; then ok; else bad "exe without icons: icon exits 2, got $rc"; 
 "$T/kitchen" exe-icon "$I/noicon.exe" "$I/out" "$I/refused2.exe" 2>/dev/null; rc=$?
 if [ $rc -eq 3 ] && [ ! -e "$I/refused2.exe" ]; then ok; else bad "exe without icons: exe-icon refused, got $rc"; fi
 
+# --- geometry: fake displays (Cocoa rects: origin bottom-left of the primary, y up)
+geo() { "$T/kitchen" geometry --screen "$1" --visible "$2" --safe-top "$3" --primary "$4" "${@:5}"; }
+expect() {  # expect <description> <expected> <actual>
+    if [ "$2" = "$3" ]; then ok; else bad "$1: expected '$2', got '$3'"; fi
+}
+UW=0,0,3440,1440; MB=0,0,1728,1117
+expect "ultrawide, menu bar ignored: 4:3 centred" "760 0 1920 1440" \
+    "$(geo $UW 0,0,3440,1410 0 $UW pillarbox:4:3 8)"
+expect "MacBook, below the notch" "144 35 1440 1080" \
+    "$(geo $MB 0,0,1728,1084 32 $MB pillarbox:4:3 8)"
+expect "native mode fills the usable area" "0 0 3440 1440" \
+    "$(geo $UW 0,0,3440,1410 0 $UW native 8)"
+expect "visible Dock at the bottom is left out" "808 1 1824 1368" \
+    "$(geo $UW 0,70,3440,1340 0 $UW pillarbox:4:3 8)"
+expect "display left of the primary: negative x" "-2240 0 1920 1440" \
+    "$(geo -2560,-323,2560,1440 -2560,-323,2560,1440 0 $MB pillarbox:4:3 8)"
+expect "display above the primary: negative y" "760 -1440 1920 1440" \
+    "$(geo 0,1117,3440,1440 0,1117,3440,1440 0 $MB pillarbox:4:3 8)"
+expect "portrait display: width-limited 4:3" "0 556 1080 808" \
+    "$(geo 0,0,1080,1920 0,0,1080,1920 0 0,0,1080,1920 pillarbox:4:3 8)"
+expect "no align keeps odd sizes" "0 0 1728 1117" \
+    "$(geo $MB $MB 0 $MB native)"
+geo $UW $UW 0 $UW pillarbox:four 8 >/dev/null 2>&1; rc=$?
+expect "bad mode exits 2" "2" "$rc"
+"$T/kitchen" geometry 999999 native >/dev/null 2>&1; rc=$?
+expect "unknown display exits 2" "2" "$rc"
+
 echo "tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

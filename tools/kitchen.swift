@@ -4,16 +4,26 @@
 //   kitchen scan <dir>                       JSON report on a game folder's executables
 //   kitchen icon <exe> <out-dir>             rounded macOS icon from the exe's own icon
 //   kitchen exe-icon <exe> <png-dir> <out>   put that icon into a copy of the exe, in place
+//   kitchen displays                         JSON list of the connected displays
+//   kitchen geometry <display|main> <mode> [align]
+//                                            where the game window goes, in Win32
+//                                            coordinates: "x y width height"
+//   kitchen frame <display|main> <pid>       black backdrop behind the game's window
+//   kitchen menubar hide|restore <marker>    auto-hide the menu bar while playing
 //
 // Subcommands are added as recipes need them (docs/RECIPES.md).
 import Foundation
 import CryptoKit
+import AppKit
 import CoreGraphics
 import ImageIO
 
 // MARK: - PE reading
 
-struct PEError: Error { let message: String }
+struct PEError: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+}
 
 /// Minimal read-only view of a Windows PE file: headers, sections, imports, version.
 struct PEFile {
@@ -553,6 +563,164 @@ func patchExeIcon(exe: URL, pngDir: URL, out: URL) throws {
     try d.write(to: out, options: .atomic)
 }
 
+
+// MARK: - displays and geometry
+
+/// A display as the geometry needs it, in Cocoa coordinates (origin bottom-left of
+/// the primary display, y up).
+struct Screen {
+    var id: UInt32
+    var name: String
+    var frame: CGRect
+    var visible: CGRect
+    var safeTop: CGFloat      // the notch; the menu bar is not counted (it auto-hides)
+}
+
+func connectedScreens() -> [Screen] {
+    NSScreen.screens.map { s in
+        let id = (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        return Screen(id: id, name: s.localizedName, frame: s.frame, visible: s.visibleFrame,
+                      safeTop: s.safeAreaInsets.top)
+    }
+}
+
+/// The game window's rect in Win32 virtual-screen coordinates (origin top-left of
+/// the primary display, y down) for `screen`, where `primary` is NSScreen.screens[0].
+///   mode "native": the whole usable area; "pillarbox:<w>:<h>": the largest area of
+///   that aspect ratio, centred. Both sides are rounded down to a multiple of `align`.
+/// Usable area: the display minus the notch and a visible Dock; the menu bar is
+/// ignored because the launcher auto-hides it while the game runs.
+func gameRect(screen: Screen, primary: Screen, mode: String, align: Int) throws -> (x: Int, y: Int, w: Int, h: Int) {
+    let f = screen.frame, v = screen.visible
+    // Dock insets: where the visible frame is smaller than the frame on left, right, bottom
+    let left = v.minX - f.minX, right = f.maxX - v.maxX, bottom = v.minY - f.minY
+    let area = CGRect(x: f.minX + left, y: f.minY + bottom,
+                      width: f.width - left - right, height: f.height - bottom - screen.safeTop)
+    let a = max(1, align)
+    var w = Int(area.width) / a * a, h = Int(area.height) / a * a
+    if mode.hasPrefix("pillarbox:") {
+        let parts = mode.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2, parts[0] > 0, parts[1] > 0 else { throw PEError(message: "bad mode \(mode)") }
+        let (rw, rh) = (parts[0], parts[1])
+        h = Int(area.height) / a * a
+        w = h * rw / rh / a * a
+        if w > Int(area.width) {
+            w = Int(area.width) / a * a
+            h = w * rh / rw / a * a
+        }
+    } else if mode != "native" {
+        throw PEError(message: "unknown mode \(mode) (native | pillarbox:<w>:<h>)")
+    }
+    // centre in the usable area, then flip to Win32 coordinates
+    let cocoaX = area.minX + (area.width - CGFloat(w)) / 2
+    let cocoaTop = area.maxY - (area.height - CGFloat(h)) / 2
+    let x = Int((cocoaX - primary.frame.minX).rounded(.down))
+    let y = Int((primary.frame.maxY - cocoaTop).rounded(.up))
+    return (x, y, w, h)
+}
+
+func pickScreen(_ which: String, _ screens: [Screen]) throws -> Screen {
+    guard !screens.isEmpty else { throw PEError(message: "no displays") }
+    if which == "main" { return screens[0] }
+    guard let id = UInt32(which), let s = screens.first(where: { $0.id == id }) else {
+        throw PEError(message: "no display \(which) (see kitchen displays)")
+    }
+    return s
+}
+
+/// Test hook: "x,y,w,h" into a CGRect.
+func rect(_ s: String) throws -> CGRect {
+    let p = s.split(separator: ",").compactMap { Double($0) }
+    guard p.count == 4 else { throw PEError(message: "bad rect \(s)") }
+    return CGRect(x: p[0], y: p[1], width: p[2], height: p[3])
+}
+
+// MARK: - frame (black backdrop)
+
+final class Backdrop: NSWindow {
+    var onClick: (() -> Void)?
+    override var canBecomeKey: Bool { false }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
+/// Keeps a black window over the display directly behind the game's largest
+/// window whenever the game is frontmost; hides it while the game is minimised;
+/// quits when the game exits. Clicking the black area brings the game back.
+final class FrameKeeper: NSObject, NSApplicationDelegate {
+    let pid: pid_t
+    let screenFrame: CGRect
+    var backdrop: Backdrop!
+
+    init(pid: pid_t, screenFrame: CGRect) { self.pid = pid; self.screenFrame = screenFrame }
+
+    func applicationDidFinishLaunching(_ note: Notification) {
+        backdrop = Backdrop(contentRect: screenFrame, styleMask: .borderless, backing: .buffered, defer: false)
+        backdrop.backgroundColor = .black
+        backdrop.isOpaque = true
+        backdrop.hasShadow = false
+        backdrop.collectionBehavior = [.managed, .fullScreenNone]
+        backdrop.isReleasedWhenClosed = false
+        backdrop.onClick = { [weak self] in
+            guard let self else { return }
+            NSRunningApplication(processIdentifier: self.pid)?.activate()
+        }
+        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    /// The game's largest normal window: its number and whether it is on screen.
+    func gameWindow() -> (number: Int, onScreen: Bool)? {
+        let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        var best: (Int, Bool, CGFloat)?
+        for w in list where (w[kCGWindowOwnerPID as String] as? pid_t) == pid && (w[kCGWindowLayer as String] as? Int) == 0 {
+            guard let n = w[kCGWindowNumber as String] as? Int,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
+            let area = (b["Width"] ?? 0) * (b["Height"] ?? 0)
+            guard area >= 640 * 480 else { continue }
+            let on = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
+            if best == nil || area > best!.2 { best = (n, on, area) }
+        }
+        return best.map { (number: $0.0, onScreen: $0.1) }
+    }
+
+    func tick() {
+        guard kill(pid, 0) == 0 else { NSApp.terminate(nil); return }
+        guard let g = gameWindow(), g.onScreen else { backdrop.orderOut(nil); return }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+            backdrop.order(.below, relativeTo: g.number)
+        }
+    }
+}
+
+// MARK: - menu bar
+
+/// The global "automatically hide the menu bar" preference, set for the session.
+/// hide: turns it on unless the user already has it on, leaving a marker file;
+/// restore: turns it off again only if the marker exists, then deletes it. A marker
+/// left by a crashed run is restored by the next run's restore.
+func menubar(_ action: String, marker: String) throws {
+    let key = "_HIHideMenuBar" as CFString
+    let current = CFPreferencesCopyValue(key, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser,
+                                         kCFPreferencesAnyHost) as? Bool ?? false
+    let fm = FileManager.default
+    switch action {
+    case "hide":
+        guard !current else { return }
+        fm.createFile(atPath: marker, contents: Data())
+        CFPreferencesSetValue(key, kCFBooleanTrue, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    case "restore":
+        guard fm.fileExists(atPath: marker) else { return }
+        CFPreferencesSetValue(key, nil, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        try fm.removeItem(atPath: marker)
+    default:
+        throw PEError(message: "menubar hide|restore <marker>")
+    }
+    CFPreferencesSynchronize(kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    DistributedNotificationCenter.default().postNotificationName(
+        NSNotification.Name("AppleInterfaceMenuBarHidingChangedNotification"), object: nil, userInfo: nil,
+        deliverImmediately: true)
+    Thread.sleep(forTimeInterval: 0.5)   // let the screens' usable area settle
+}
+
 // MARK: - main
 
 func fail(_ message: String) -> Never {
@@ -588,6 +756,51 @@ case "exe-icon":
         FileHandle.standardError.write("kitchen exe-icon: refused: \(e.message)\n".data(using: .utf8)!)
         exit(3)
     } catch { fail("kitchen exe-icon: \(error)") }
+case "displays":
+    let list: [[String: Any]] = connectedScreens().enumerated().map { i, s in
+        ["id": s.id, "name": s.name, "main": i == 0,
+         "frame": [s.frame.minX, s.frame.minY, s.frame.width, s.frame.height],
+         "visible": [s.visible.minX, s.visible.minY, s.visible.width, s.visible.height],
+         "safeTop": s.safeTop]
+    }
+    let json = try! JSONSerialization.data(withJSONObject: list, options: [.prettyPrinted, .sortedKeys])
+    FileHandle.standardOutput.write(json + "\n".data(using: .utf8)!)
+case "geometry":
+    // kitchen geometry <display|main> <mode> [align]
+    // test form: kitchen geometry --screen x,y,w,h --visible x,y,w,h --safe-top n --primary x,y,w,h <mode> [align]
+    do {
+        var rest = Array(args.dropFirst(2))
+        var screen: Screen, primary: Screen
+        if rest.first == "--screen" {
+            guard rest.count >= 9 else { fail("usage: kitchen geometry --screen R --visible R --safe-top N --primary R <mode> [align]") }
+            screen = Screen(id: 0, name: "test", frame: try rect(rest[1]), visible: try rect(rest[3]),
+                            safeTop: CGFloat(Double(rest[5]) ?? 0))
+            primary = Screen(id: 0, name: "primary", frame: try rect(rest[7]), visible: try rect(rest[7]), safeTop: 0)
+            rest = Array(rest.dropFirst(8))
+        } else {
+            guard rest.count >= 2 else { fail("usage: kitchen geometry <display|main> <mode> [align]") }
+            let screens = connectedScreens()
+            screen = try pickScreen(rest[0], screens); primary = screens[0]
+            rest = Array(rest.dropFirst(1))
+        }
+        guard let mode = rest.first else { fail("kitchen geometry: missing mode") }
+        let align = rest.count > 1 ? Int(rest[1]) ?? 1 : 1
+        let r = try gameRect(screen: screen, primary: primary, mode: mode, align: align)
+        print("\(r.x) \(r.y) \(r.w) \(r.h)")
+    } catch { fail("kitchen geometry: \(error)") }
+case "frame":
+    guard args.count == 4, let pid = pid_t(args[3]) else { fail("usage: kitchen frame <display|main> <pid>") }
+    do {
+        let screen = try pickScreen(args[2], connectedScreens())
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        let keeper = FrameKeeper(pid: pid, screenFrame: screen.frame)
+        app.delegate = keeper
+        app.run()
+    } catch { fail("kitchen frame: \(error)") }
+case "menubar":
+    guard args.count == 4 else { fail("usage: kitchen menubar hide|restore <marker>") }
+    do { try menubar(args[2], marker: args[3]) } catch { fail("kitchen menubar: \(error)") }
 default:
-    fail("usage: kitchen scan <dir> | icon <exe> <out-dir> | exe-icon <exe> <png-dir> <out-exe>")
+    fail("usage: kitchen scan | icon | exe-icon | displays | geometry | frame | menubar (see the header of tools/kitchen.swift)")
 }
