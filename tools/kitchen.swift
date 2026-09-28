@@ -15,6 +15,8 @@
 //                                            shell variables for core/launch.sh
 //   kitchen menubar hide|restore <marker>    auto-hide the menu bar while playing
 //   kitchen recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
+//   kitchen recipe-field <recipe.json> <field>   one value for the build: title,
+//                                            bundleId, engine, proxy.dll, proxy.def
 //   kitchen fetch <recipe-dir> <cache> <out> build time: pinned downloads into <out>
 //   kitchen install <recipe-dir> <source> <game-dir> <icon-dir>
 //                                            copy the player's game and apply the recipe
@@ -1278,6 +1280,19 @@ case "prepare-launch":
     guard args.count == 5, let variant = Int(args[3]) else { fail("usage: kitchen prepare-launch <Resources> <variant> <display|main>") }
     do { print(try prepareLaunch(res: URL(fileURLWithPath: args[2]), variant: variant, display: args[4])) }
     catch { fail("kitchen prepare-launch: \(error)") }
+case "recipe-field":
+    guard args.count == 4 else { fail("usage: kitchen recipe-field <recipe.json> <field>") }
+    do {
+        let r = try loadRecipe(URL(fileURLWithPath: args[2]))
+        switch args[3] {
+        case "title": print(r.title)
+        case "bundleId": print(r.bundleId)
+        case "engine": print(r.engine)
+        case "proxy.dll": print(r.install?.proxy?.dll ?? "")
+        case "proxy.def": print(r.install?.proxy?.def ?? "")
+        default: fail("kitchen recipe-field: unknown field \(args[3])")
+        }
+    } catch { fail("kitchen recipe-field: \(error)") }
 case "recipe-check":
     guard args.count == 3 else { fail("usage: kitchen recipe-check <recipe.json>") }
     let errors = checkRecipe(URL(fileURLWithPath: args[2]))

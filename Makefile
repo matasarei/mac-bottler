@@ -2,10 +2,12 @@
 # See README.md. make is the only entry point; scripts under core/ are internal.
 #
 #   make check                   verify the build prerequisites
+#   make app RECIPE=recipes/<game> [APP=<path>]   build the game's app (default ~/Applications/<title>.app)
 #   make engine APP=<app> [ENGINE=<name>]   install a pinned Wine engine (engines/)
 #   make prefix APP=<app>        create the app's Wine prefix
 #   make helpers                 build the Windows helpers into build/win/
 #   make test                    hermetic tests (synthetic PE files, no game data, no wine)
+#   make compile                 type-check the Swift sources
 #
 # Targets arrive with the plan's steps (engine, prefix, helpers, app, test,
 # compile, lint); until then they are not listed here.
@@ -15,7 +17,7 @@ ENGINE ?= crossover-23
 RES     = $(APP)/Contents/Resources
 DEPS    = build/deps
 
-.PHONY: help check engine prefix helpers test
+.PHONY: help check app engine prefix helpers test compile
 
 help:
 	@sed -n '1,/^$$/p' Makefile | sed 's/^# \{0,1\}//'
@@ -39,3 +41,12 @@ helpers:
 	@mkdir -p build/win
 	@i686-w64-mingw32-gcc -O2 -mwindows -o build/win/kitchen-place.exe win/place.c
 	@echo "==> build/win/kitchen-place.exe"
+
+app:
+	@[ -n "$(RECIPE)" ] || { echo "usage: make app RECIPE=recipes/<game> [APP=<path>]"; exit 2; }
+	@core/build-app.sh "$(RECIPE)" "$(filter-out build/kitchen-test.app,$(APP))"
+
+compile:
+	@swiftc -typecheck tools/kitchen.swift
+	@swiftc -typecheck -parse-as-library core/launcher/Launcher.swift
+	@echo "==> Swift sources type-check"

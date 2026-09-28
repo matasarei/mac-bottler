@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "title": "Kitchen Test",
+  "bundleId": "com.matasarei.kitchen.test",
+  "engine": "crossover-23",
+  "detect": { "required": ["Game.exe"], "fingerprint": "Game.exe", "unknown": "warn" },
+  "launch": {
+    "variants": [ { "label": "Play", "exe": "Game.exe" } ],
+    "window": { "mode": "native" }
+  }
+}

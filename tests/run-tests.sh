@@ -305,6 +305,18 @@ rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
 if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
 unset KITCHEN_TEST_SCREENS
 
+# --- core/build-app.sh: bundle structure from the minimal fixture recipe (no engine)
+B="$T/Kitchen Test.app"
+if core/build-app.sh tests/fixtures/recipe-min "$B" --no-engine >/dev/null 2>&1; then ok; else bad "build-app exits 0"; fi
+expect "bundle id from the recipe" "com.matasarei.kitchen.test" "$(defaults read "$PWD/$B/Contents/Info" CFBundleIdentifier 2>/dev/null)"
+expect "bundle name from the recipe" "Kitchen Test" "$(defaults read "$PWD/$B/Contents/Info" CFBundleName 2>/dev/null)"
+if file "$B/Contents/MacOS/launcher" 2>/dev/null | grep -q "Mach-O 64-bit executable"; then ok; else bad "launcher binary built"; fi
+for f in kitchen kitchen-place.exe install.sh launch.sh wine-env.sh; do
+    if [ -s "$B/Contents/Resources/bin/$f" ]; then ok; else bad "bundle has bin/$f"; fi
+done
+expect "recipe copied into the bundle" "Kitchen Test" "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['title'])" "$B/Contents/Resources/recipe/recipe.json" 2>/dev/null)"
+if codesign -v "$B" 2>/dev/null; then ok; else bad "bundle seal verifies"; fi
+
 # ini-set on a new file and a missing section
 "$T/kitchen" ini-set "$T/new.ini" Main a=1 b=2
 expect "ini-set creates file and section" "$(printf '[Main]\na=1\nb=2\n')" "$(cat "$T/new.ini")"
