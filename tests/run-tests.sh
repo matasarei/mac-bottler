@@ -255,6 +255,56 @@ if [ -s "$A/icon/AppIcon.icns" ]; then ok; else bad "install.sh icons go to Reso
 bash core/install.sh "$A" "$T/does-not-exist" >/dev/null 2>&1; rc=$?
 expect "install.sh: missing source exits 2" "2" "$rc"
 
+# --- core/launch.sh with a stub wine and a recording kitchen
+L="$PWD/$T/launch/Contents/Resources"; mkdir -p "$L/bin" "$L/wine/bin" "$L/game" "$L/recipe"
+cp core/launch.sh core/wine-env.sh "$L/bin/"
+cat > "$L/bin/kitchen" <<STUB
+#!/bin/bash
+case "\$1" in frame|menubar) echo "\$*" >> "$L/calls"; exit 0 ;; esac
+exec "$PWD/$T/kitchen" "\$@"
+STUB
+cat > "$L/wine/bin/wine64" <<STUB
+#!/bin/bash
+{ echo "ARGS: \$*"; echo "CWD: \$PWD"; env | grep -E '^(WINEPREFIX|HOME|WINEDLLOVERRIDES|WINEMSYNC|GAME_MODE|DYLD_FALLBACK_LIBRARY_PATH)='; } > "$L/wine.log"
+exit "\${STUB_RC:-0}"
+STUB
+printf '#!/bin/bash\nexit 0\n' > "$L/wine/bin/wineserver"
+chmod +x "$L/bin/kitchen" "$L/wine/bin/wine64" "$L/wine/bin/wineserver"
+printf '[thinker]\r\nwindow_width=1\r\nwindow_height=1\r\n' > "$L/game/thinker.ini"
+cat > "$L/recipe/recipe.json" <<'JSON'
+{ "schema": 1, "title": "Launch Test", "bundleId": "com.example.launch", "engine": "crossover-23",
+  "detect": { "required": ["Game.exe"], "fingerprint": "Game.exe" },
+  "launch": {
+    "variants": [ { "label": "Plain", "exe": "thinker.exe", "args": [] },
+                  { "label": "With args", "exe": "bin/thinker.exe", "args": ["-smac", "two words"] } ],
+    "window": { "mode": "pillarbox:4:3", "align": 8, "backdrop": true, "menubar": "hide" },
+    "ini": [ { "file": "thinker.ini", "section": "thinker", "set": { "window_width": "{w}", "window_height": "{h}" } } ],
+    "env": { "GAME_MODE": "it's quoted" },
+    "dllOverrides": { "ddraw": "n,b", "dinput": "b" } } }
+JSON
+export KITCHEN_TEST_SCREENS="0,0,1728,1117;0,0,1728,1084;32;0,0,1728,1117"
+rm -f "$L/calls"; bash "$L/bin/launch.sh" "$L" 1 main; rc=$?
+expect "launch exits with the game's code" "0" "$rc"
+expect "wine runs kitchen-place with the rect and the variant's args" \
+    "ARGS: $L/bin/kitchen-place.exe 144 35 1440 1080 -- C:\\Game\\bin\\thinker.exe -smac two words" \
+    "$(grep '^ARGS:' "$L/wine.log")"
+expect "wine runs in the game folder" "CWD: $L/game" "$(grep '^CWD:' "$L/wine.log")"
+expect "per-launch INI values written" "$(printf '[thinker]\r\nwindow_width=1440\r\nwindow_height=1080\r\n')" "$(cat "$L/game/thinker.ini")"
+expect "WINEPREFIX is the bundle's" "WINEPREFIX=$L/prefix" "$(grep '^WINEPREFIX=' "$L/wine.log")"
+expect "HOME is inside the bundle" "HOME=$L/home" "$(grep '^HOME=' "$L/wine.log")"
+expect "DLL overrides from the recipe" "WINEDLLOVERRIDES=ddraw=n,b;dinput=b" "$(grep '^WINEDLLOVERRIDES=' "$L/wine.log")"
+expect "recipe env exported, quotes intact" "GAME_MODE=it's quoted" "$(grep '^GAME_MODE=' "$L/wine.log")"
+expect "menu bar: restored, hidden, frame started, restored at exit" \
+    "$(printf 'menubar restore %s\nmenubar hide %s\nframe main --wine %s\nmenubar restore %s' "$L/logs/menubar-restore" "$L/logs/menubar-restore" "$L" "$L/logs/menubar-restore")" \
+    "$(cat "$L/calls")"
+rm -f "$L/calls"; STUB_RC=5 bash "$L/bin/launch.sh" "$L" 0 main; rc=$?
+expect "a failing game's exit code is passed on" "5" "$rc"
+expect "menu bar restored even when the game fails" "menubar restore $L/logs/menubar-restore" "$(tail -1 "$L/calls")"
+expect "variant without args" "ARGS: $L/bin/kitchen-place.exe 144 35 1440 1080 -- C:\\Game\\thinker.exe" "$(grep '^ARGS:' "$L/wine.log")"
+rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
+if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
+unset KITCHEN_TEST_SCREENS
+
 # ini-set on a new file and a missing section
 "$T/kitchen" ini-set "$T/new.ini" Main a=1 b=2
 expect "ini-set creates file and section" "$(printf '[Main]\na=1\nb=2\n')" "$(cat "$T/new.ini")"

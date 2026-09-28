@@ -8,7 +8,11 @@
 //   kitchen geometry <display|main> <mode> [align]
 //                                            where the game window goes, in Win32
 //                                            coordinates: "x y width height"
-//   kitchen frame <display|main> <pid>       black backdrop behind the game's window
+//   kitchen frame <display|main> <pid | --wine <Resources>>
+//                                            black backdrop behind the game's window
+//   kitchen prepare-launch <Resources> <variant> <display|main>
+//                                            geometry + per-launch INI edits; prints
+//                                            shell variables for core/launch.sh
 //   kitchen menubar hide|restore <marker>    auto-hide the menu bar while playing
 //   kitchen recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
 //   kitchen fetch <recipe-dir> <cache> <out> build time: pinned downloads into <out>
@@ -651,12 +655,46 @@ final class Backdrop: NSWindow {
 /// Keeps a black window over the display directly behind the game's largest
 /// window whenever the game is frontmost; hides it while the game is minimised;
 /// quits when the game exits. Clicking the black area brings the game back.
+/// Executable path of a process ("" when unknown).
+func processPath(_ pid: pid_t) -> String {
+    var buf = [CChar](repeating: 0, count: 4096)
+    return proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 ? String(cString: buf) : ""
+}
+
+/// Every process running an executable under `root` (an app's wine folder).
+func processes(under root: String) -> [pid_t] {
+    let n = proc_listallpids(nil, 0)
+    guard n > 0 else { return [] }
+    var pids = [pid_t](repeating: 0, count: Int(n) * 2)
+    let got = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+    return pids.prefix(Int(max(0, got))).filter { $0 > 0 && processPath($0).hasPrefix(root) }
+}
+
 final class FrameKeeper: NSObject, NSApplicationDelegate {
-    let pid: pid_t
+    /// Either one process, or every process of an app's wine (a game started by
+    /// its own launcher has a pid the caller never sees).
+    let pid: pid_t?
+    let wineRoot: String?
     let screenFrame: CGRect
     var backdrop: Backdrop!
+    var owner: pid_t = 0
+    var lastAliveCheck = Date.distantPast
+    var seenAlive = false
+    let started = Date()
 
-    init(pid: pid_t, screenFrame: CGRect) { self.pid = pid; self.screenFrame = screenFrame }
+    init(pid: pid_t?, wineRoot: String?, screenFrame: CGRect) {
+        self.pid = pid; self.wineRoot = wineRoot; self.screenFrame = screenFrame
+    }
+
+    func owns(_ p: pid_t) -> Bool {
+        if let pid { return p == pid }
+        return processPath(p).hasPrefix(wineRoot!)
+    }
+
+    func alive() -> Bool {
+        if let pid { return kill(pid, 0) == 0 }
+        return !processes(under: wineRoot!).isEmpty
+    }
 
     func applicationDidFinishLaunching(_ note: Notification) {
         backdrop = Backdrop(contentRect: screenFrame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -666,31 +704,38 @@ final class FrameKeeper: NSObject, NSApplicationDelegate {
         backdrop.collectionBehavior = [.managed, .fullScreenNone]
         backdrop.isReleasedWhenClosed = false
         backdrop.onClick = { [weak self] in
-            guard let self else { return }
-            NSRunningApplication(processIdentifier: self.pid)?.activate()
+            guard let self, self.owner != 0 else { return }
+            NSRunningApplication(processIdentifier: self.owner)?.activate()
         }
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
     }
 
-    /// The game's largest normal window: its number and whether it is on screen.
-    func gameWindow() -> (number: Int, onScreen: Bool)? {
+    /// The game's largest normal window: its number, owner and whether it is on screen.
+    func gameWindow() -> (number: Int, owner: pid_t, onScreen: Bool)? {
         let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        var best: (Int, Bool, CGFloat)?
-        for w in list where (w[kCGWindowOwnerPID as String] as? pid_t) == pid && (w[kCGWindowLayer as String] as? Int) == 0 {
-            guard let n = w[kCGWindowNumber as String] as? Int,
+        var best: (Int, pid_t, Bool, CGFloat)?
+        for w in list where (w[kCGWindowLayer as String] as? Int) == 0 {
+            guard let p = w[kCGWindowOwnerPID as String] as? pid_t, owns(p),
+                  let n = w[kCGWindowNumber as String] as? Int,
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
             let area = (b["Width"] ?? 0) * (b["Height"] ?? 0)
             guard area >= 640 * 480 else { continue }
             let on = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
-            if best == nil || area > best!.2 { best = (n, on, area) }
+            if best == nil || area > best!.3 { best = (n, p, on, area) }
         }
-        return best.map { (number: $0.0, onScreen: $0.1) }
+        return best.map { (number: $0.0, owner: $0.1, onScreen: $0.2) }
     }
 
     func tick() {
-        guard kill(pid, 0) == 0 else { NSApp.terminate(nil); return }
+        if Date().timeIntervalSince(lastAliveCheck) > 1 {
+            lastAliveCheck = Date()
+            // started before the game: wait for it (2 minutes), then follow it until it is gone
+            if alive() { seenAlive = true }
+            else if seenAlive || Date().timeIntervalSince(started) > 120 { NSApp.terminate(nil); return }
+        }
         guard let g = gameWindow(), g.onScreen else { backdrop.orderOut(nil); return }
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+        owner = g.owner
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == g.owner {
             backdrop.order(.below, relativeTo: g.number)
         }
     }
@@ -1089,6 +1134,61 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
     return changes
 }
 
+
+// MARK: - launch
+
+/// POSIX shell single-quoted word.
+func shq(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
+/// Resolve the recipe's launch for one variant on one display: compute the window
+/// rect, apply the per-launch INI edits ({x} {y} {w} {h}), and return shell
+/// variable assignments for core/launch.sh. KITCHEN_TEST_SCREENS="frame;visible;safeTop;primary"
+/// replaces the real displays (tests).
+func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
+    let recipe = try loadRecipe(res.appendingPathComponent("recipe/recipe.json"))
+    guard recipe.launch.variants.indices.contains(variant) else {
+        throw PEError(message: "no variant \(variant): the recipe has \(recipe.launch.variants.count)")
+    }
+    let v = recipe.launch.variants[variant], w = recipe.launch.window
+    let screen: Screen, primary: Screen
+    if let t = ProcessInfo.processInfo.environment["KITCHEN_TEST_SCREENS"] {
+        let p = t.split(separator: ";").map(String.init)
+        guard p.count == 4 else { throw PEError(message: "KITCHEN_TEST_SCREENS needs 4 parts") }
+        screen = Screen(id: 0, name: "test", frame: try rect(p[0]), visible: try rect(p[1]), safeTop: CGFloat(Double(p[2]) ?? 0))
+        primary = Screen(id: 0, name: "primary", frame: try rect(p[3]), visible: try rect(p[3]), safeTop: 0)
+    } else {
+        let screens = connectedScreens()
+        screen = try pickScreen(display, screens); primary = screens[0]
+    }
+    let r = try gameRect(screen: screen, primary: primary, mode: w.mode, align: w.align ?? 1)
+    let game = res.appendingPathComponent("game")
+    for edit in recipe.launch.ini ?? [] {
+        var values: [String: String] = [:]
+        for (k, val) in edit.set {
+            values[k] = val.replacingOccurrences(of: "{x}", with: "\(r.x)").replacingOccurrences(of: "{y}", with: "\(r.y)")
+                .replacingOccurrences(of: "{w}", with: "\(r.w)").replacingOccurrences(of: "{h}", with: "\(r.h)")
+        }
+        try iniSet(game.appendingPathComponent(edit.file), section: edit.section, values)
+    }
+    let overrides = (recipe.launch.dllOverrides ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+    var out = [
+        "GX=\(r.x)", "GY=\(r.y)", "GW=\(r.w)", "GH=\(r.h)",
+        "GAME_EXE=" + shq("C:\\Game\\" + v.exe.replacingOccurrences(of: "/", with: "\\")),
+        "GAME_ARGS=(" + (v.args ?? []).map(shq).joined(separator: " ") + ")",
+        "WIN_TITLE=" + shq(w.title ?? ""),
+        "BACKDROP=" + ((w.backdrop ?? false) ? "1" : "0"),
+        "MENUBAR=" + shq(w.menubar ?? "keep"),
+        "RECIPE_OVERRIDES=" + shq(overrides.joined(separator: ";")),
+    ]
+    for (k, val) in (recipe.launch.env ?? [:]).sorted(by: { $0.key < $1.key }) {
+        guard k.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil else {
+            throw PEError(message: "bad environment variable name in the recipe: \(k)")
+        }
+        out.append("export \(k)=\(shq(val))")
+    }
+    return out.joined(separator: "\n")
+}
+
 // MARK: - main
 
 func fail(_ message: String) -> Never {
@@ -1157,18 +1257,27 @@ case "geometry":
         print("\(r.x) \(r.y) \(r.w) \(r.h)")
     } catch { fail("kitchen geometry: \(error)") }
 case "frame":
-    guard args.count == 4, let pid = pid_t(args[3]) else { fail("usage: kitchen frame <display|main> <pid>") }
+    let usage = "usage: kitchen frame <display|main> <pid | --wine <Resources>>"
+    var pid: pid_t?, wineRoot: String?
+    if args.count == 4, let p = pid_t(args[3]) { pid = p }
+    else if args.count == 5, args[3] == "--wine" {
+        wineRoot = URL(fileURLWithPath: args[4]).appendingPathComponent("wine").resolvingSymlinksInPath().path + "/"
+    } else { fail(usage) }
     do {
         let screen = try pickScreen(args[2], connectedScreens())
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let keeper = FrameKeeper(pid: pid, screenFrame: screen.frame)
+        let keeper = FrameKeeper(pid: pid, wineRoot: wineRoot, screenFrame: screen.frame)
         app.delegate = keeper
         app.run()
     } catch { fail("kitchen frame: \(error)") }
 case "menubar":
     guard args.count == 4 else { fail("usage: kitchen menubar hide|restore <marker>") }
     do { try menubar(args[2], marker: args[3]) } catch { fail("kitchen menubar: \(error)") }
+case "prepare-launch":
+    guard args.count == 5, let variant = Int(args[3]) else { fail("usage: kitchen prepare-launch <Resources> <variant> <display|main>") }
+    do { print(try prepareLaunch(res: URL(fileURLWithPath: args[2]), variant: variant, display: args[4])) }
+    catch { fail("kitchen prepare-launch: \(error)") }
 case "recipe-check":
     guard args.count == 3 else { fail("usage: kitchen recipe-check <recipe.json>") }
     let errors = checkRecipe(URL(fileURLWithPath: args[2]))
