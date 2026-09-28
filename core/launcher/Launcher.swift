@@ -216,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { !playing }
 }
 
-/// The app menu the window needs: Hide and Quit, with their usual shortcuts.
+/// The menus the window needs: Hide and Quit, and Close, with their usual shortcuts.
 func mainMenu() -> NSMenu {
     let menu = NSMenu(), appItem = NSMenuItem(), appMenu = NSMenu()
     appMenu.addItem(withTitle: "Hide \(recipe.title)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
@@ -224,5 +224,9 @@ func mainMenu() -> NSMenu {
     appMenu.addItem(withTitle: "Quit \(recipe.title)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appItem.submenu = appMenu
     menu.addItem(appItem)
+    let windowItem = NSMenuItem(), windowMenu = NSMenu(title: "Window")
+    windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+    windowItem.submenu = windowMenu
+    menu.addItem(windowItem)
     return menu
 }
