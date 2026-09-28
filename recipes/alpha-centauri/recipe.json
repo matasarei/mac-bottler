@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "title": "Alpha Centauri",
+  "bundleId": "com.matasarei.kitchen.alpha-centauri",
+  "engine": "crossover-23",
+
+  "detect": {
+    "required": ["terranx.exe", "terran.exe", "soundx.dll"],
+    "fingerprint": "terranx.exe",
+    "builds": {
+      "d505e007c20824a9869ff18099f2e9c8": { "status": "verified", "label": "Steam, v2.0" }
+    },
+    "unknown": "warn"
+  },
+
+  "install": {
+    "exclude": ["EmptySteamDepot", "secdrv.sys", "drvmgt.dll", "clcd16.dll", "clcd32.dll",
+                "TERRAN.ICD", "TERRANX.ICD", "GameuxInstallHelper.dll", "steam_autocloud.vdf"],
+    "rename": { "ddraw.dll": "ddraw.dll.gog" },
+    "downloads": [
+      {
+        "url": "https://github.com/induktio/thinker/releases/download/v5.5/Thinker_v5.5.zip",
+        "sha256": "d8d30b28295fbe1d8870192165eb34af6e18ca9cb937838620649db057165fa9",
+        "files": {
+          "thinker.exe": "thinker.exe",
+          "thinker.dll": "thinker.dll",
+          "thinker.ini": "thinker.ini",
+          "modmenu.txt": "modmenu.txt",
+          "basenames": "basenames",
+          "smac_mod": "smac_mod"
+        }
+      }
+    ],
+    "ini": [
+      {
+        "file": "Alpha Centauri.Ini",
+        "section": "Alpha Centauri",
+        "set": { "DirectDraw": "0", "ds3d": "0", "eax": "0", "MoviePlayerPath": "", "MoviePlayerArgs": "",
+                 "Latest Save": "" }
+      }
+    ],
+    "proxy": { "dll": "soundx.dll", "def": "soundx.def" },
+    "appIcon": "terran.exe",
+    "exeIcon": "terranx.exe"
+  },
+
+  "launch": {
+    "variants": [
+      { "label": "Alien Crossfire", "exe": "thinker.exe", "args": [] },
+      { "label": "Alpha Centauri", "exe": "thinker.exe", "args": ["-smac"] }
+    ],
+    "window": { "mode": "pillarbox:4:3", "align": 8, "backdrop": true, "menubar": "hide" },
+    "ini": [
+      {
+        "file": "thinker.ini",
+        "section": "thinker",
+        "set": { "video_mode": "2", "window_width": "{w}", "window_height": "{h}" }
+      }
+    ]
+  }
+}

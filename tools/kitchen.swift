@@ -21,6 +21,8 @@
 //   kitchen install <recipe-dir> <source> <game-dir> <icon-dir>
 //                                            copy the player's game and apply the recipe
 //   kitchen ini-set <file> <section> key=value...   edit an INI file (CRLF kept)
+//   kitchen dock-name <wine dir> <name>      CrossOver engines: the running game shows
+//                                            as <name> in the Dock and the menu bar
 //
 // Subcommands are added as recipes need them (docs/RECIPES.md).
 import Foundation
@@ -1035,15 +1037,19 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
     let proxyDLL = recipe.install?.proxy?.dll
     try fm.createDirectory(at: game, withIntermediateDirectories: true)
     let src = source.resolvingSymlinksInPath()
-    var copied = 0
+    var copied = 0, expected = 0
     if let walker = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
         for case let url as URL in walker {
             let rel = String(url.resolvingSymlinksInPath().path.dropFirst(src.path.count + 1))
-            if excluded.contains(String(rel.split(separator: "/").first ?? "").lowercased()) {
-                walker.skipDescendants(); continue
-            }
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if excluded.contains(String(rel.split(separator: "/").first ?? "").lowercased()) {
+                // skipDescendants only for a folder: called on a file, it skips the most
+                // recently opened folder instead, silently losing a whole folder
+                if values.isDirectory == true { walker.skipDescendants() }
+                continue
+            }
             if values.isSymbolicLink == true { continue }
+            if values.isDirectory != true { expected += 1 }
             let dst = game.appendingPathComponent(rel)
             if values.isDirectory == true {
                 try fm.createDirectory(at: dst, withIntermediateDirectories: true); continue
@@ -1054,6 +1060,27 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
         }
     }
     if copied > 0 { note("copied \(copied) files") }
+    // every file the source has (minus exclusions) must now be in the game folder
+    var missing: [String] = []
+    if let walker = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
+        for case let url as URL in walker {
+            let rel = String(url.resolvingSymlinksInPath().path.dropFirst(src.path.count + 1))
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if excluded.contains(String(rel.split(separator: "/").first ?? "").lowercased()) {
+                if values.isDirectory == true { walker.skipDescendants() }
+                continue
+            }
+            if values.isDirectory == true || values.isSymbolicLink == true { continue }
+            let present = fm.fileExists(atPath: game.appendingPathComponent(rel).path)
+                || renames[rel].map { fm.fileExists(atPath: game.appendingPathComponent($0).path) } ?? false
+                || (rel == proxyDLL && fm.fileExists(atPath: game.appendingPathComponent(
+                        (rel as NSString).deletingPathExtension + "_orig.dll").path))
+            if !present { missing.append(rel) }
+        }
+    }
+    guard missing.isEmpty else {
+        throw PEError(message: "\(missing.count) of \(expected) files did not arrive, e.g. \(missing.prefix(3).joined(separator: ", "))")
+    }
 
     // 3. renames (e.g. set a bundled wrapper DLL aside)
     for (from, to) in renames.sorted(by: { $0.key < $1.key }) {
@@ -1191,6 +1218,75 @@ func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
     return out.joined(separator: "\n")
 }
 
+
+// MARK: - Dock name (CrossOver engines)
+
+/// A macOS process is named after the file it runs, and a CrossOver 23 engine runs
+/// every Windows program through bin/wine64-preloader, so the Dock says
+/// "wine64-preloader". Renaming the loader is not enough: ntdll.so builds the
+/// loader's path from one string, which is patched (NUL-padded, so the name must be
+/// ASCII and at most 16 bytes). The loaders' embedded Info.plist gets the name for
+/// the menu bar. A symlink keeps the old name working. Idempotent.
+func dockName(wine: URL, name: String) throws {
+    let fm = FileManager.default
+    let original = "wine64-preloader"
+    guard !name.isEmpty, name.utf8.count <= original.utf8.count, name.allSatisfy({ $0.isASCII && $0 != "/" }) else {
+        throw RefusedError(message: "\"\(name)\" is not usable as a loader name (ASCII, at most 16 bytes)")
+    }
+    let bin = wine.appendingPathComponent("bin")
+    let loader = bin.appendingPathComponent(original), renamed = bin.appendingPathComponent(name)
+    let ntdll = wine.appendingPathComponent("lib/wine/x86_64-unix/ntdll.so")
+    guard fm.fileExists(atPath: ntdll.path) else { throw RefusedError(message: "not a CrossOver engine (no ntdll.so)") }
+
+    // 1. ntdll.so: the one "wine64-preloader" path string
+    var n = try Data(contentsOf: ntdll)
+    let from = Data([0] + Array(original.utf8) + [0])
+    let to = Data([0] + Array(name.utf8) + [UInt8](repeating: 0, count: original.utf8.count - name.utf8.count + 1))
+    let already = Data([0] + Array(name.utf8) + [0])
+    if let r = n.range(of: from) {
+        guard n.range(of: from, in: r.upperBound..<n.count) == nil else { throw RefusedError(message: "ntdll.so names the loader more than once") }
+        n.replaceSubrange(r, with: to)
+        try n.write(to: ntdll, options: .atomic)
+        try? run("/usr/bin/codesign", ["--force", "--sign", "-", ntdll.path])   // it ships ad-hoc signed
+        print("==> ntdll.so starts \(name)")
+    } else if n.range(of: already) == nil {
+        throw RefusedError(message: "ntdll.so does not name wine64-preloader")
+    }
+
+    // 2. the loader file, with the old name kept as a symlink
+    if (try? loader.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true {
+        guard fm.fileExists(atPath: loader.path) else { throw RefusedError(message: "no bin/\(original)") }
+        if name != original {
+            try? fm.removeItem(at: renamed)
+            try fm.moveItem(at: loader, to: renamed)
+            try fm.createSymbolicLink(atPath: loader.path, withDestinationPath: name)
+            print("==> bin/\(original) is now bin/\(name)")
+        }
+    }
+
+    // 3. CFBundleName in the loaders' embedded Info.plist (the menu bar's app name)
+    for file in [renamed, bin.appendingPathComponent("wine64")] where fm.fileExists(atPath: file.path) {
+        var d = try Data(contentsOf: file)
+        guard let key = d.range(of: Data("<key>CFBundleName</key>".utf8)),
+              let open = d.range(of: Data("<string>".utf8), in: key.upperBound..<min(d.count, key.upperBound + 64)),
+              let close = d.range(of: Data("</string>".utf8), in: open.upperBound..<min(d.count, open.upperBound + 256)),
+              let plistEnd = d.range(of: Data("</plist>".utf8), in: close.upperBound..<d.count) else { continue }
+        let current = String(decoding: d[open.upperBound..<close.lowerBound], as: UTF8.self)
+        if current == name { continue }
+        // everything from the value to the end of the plist is rewritten in the same
+        // space; whitespace between XML elements is free, so a longer name fits by
+        // dropping indentation after it
+        let tail = String(decoding: d[close.lowerBound..<plistEnd.upperBound], as: UTF8.self)
+        let compactTail = tail.replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "    ", with: "")
+        let newBytes = Data((name + compactTail).utf8)
+        let space = plistEnd.upperBound - open.upperBound
+        guard newBytes.count <= space else { print("warning: \(file.lastPathComponent): no room for the name"); continue }
+        d.replaceSubrange(open.upperBound..<plistEnd.upperBound, with: newBytes + Data(repeating: 0x20, count: space - newBytes.count))
+        try d.write(to: file, options: .atomic)
+        print("==> \(file.lastPathComponent) is called \(name) in the menu bar")
+    }
+}
+
 // MARK: - main
 
 func fail(_ message: String) -> Never {
@@ -1293,6 +1389,13 @@ case "recipe-field":
         default: fail("kitchen recipe-field: unknown field \(args[3])")
         }
     } catch { fail("kitchen recipe-field: \(error)") }
+case "dock-name":
+    guard args.count == 4 else { fail("usage: kitchen dock-name <wine dir> <name>") }
+    do { try dockName(wine: URL(fileURLWithPath: args[2]), name: args[3]) }
+    catch let e as RefusedError {
+        FileHandle.standardError.write("kitchen dock-name: refused: \(e.message)\n".data(using: .utf8)!)
+        exit(3)
+    } catch { fail("kitchen dock-name: \(error)") }
 case "recipe-check":
     guard args.count == 3 else { fail("usage: kitchen recipe-check <recipe.json>") }
     let errors = checkRecipe(URL(fileURLWithPath: args[2]))

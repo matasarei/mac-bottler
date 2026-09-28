@@ -170,7 +170,9 @@ R="$T/recipe"; SRC="$R/source"; mkdir -p "$SRC/saves" "$R/recipe" "$R/zip/mod/su
 pe "$SRC/Game.exe" --size 300000 --imports KERNEL32.dll,USER32.dll,DDRAW.dll --icons 16,24,32,48,64
 cp "$X/fake.dll" "$SRC/sound.dll"
 pe "$SRC/ddraw.dll" --imports KERNEL32.dll
-touch "$SRC/secdrv.sys"
+touch "$SRC/secdrv.sys" "$SRC/TERRAN.ICD" "$SRC/aaa.icd" "$SRC/zzz.icd"
+# folders full of files around the excluded files: a walker bug once dropped whole folders
+for d in fx techs voices aa zz; do mkdir -p "$SRC/$d"; for i in 1 2 3 4 5; do echo "$d $i" > "$SRC/$d/file $i.wav"; done; done
 printf '[Game]\r\nMode=1\r\nName=test\r\n\r\n[Other]\r\nx=1\r\n' > "$SRC/Game.ini"
 echo "my save" > "$SRC/saves/slot1.sav"
 echo "mod v1" > "$R/zip/mod/readme.txt"; echo "data" > "$R/zip/mod/sub/data.txt"
@@ -185,7 +187,7 @@ cat > "$R/recipe/recipe.json" <<JSON
   "detect": { "required": ["Game.exe"], "fingerprint": "Game.exe",
               "builds": { "$GAMEMD5": { "status": "$1", "label": "fixture", "message": "not this one" } } },
   "install": {
-    "exclude": ["secdrv.sys"],
+    "exclude": ["secdrv.sys", "TERRAN.ICD", "aaa.icd", "zzz.icd"],
     "rename": { "ddraw.dll": "ddraw.dll.gog" },
     "downloads": [ { "url": "file://$PWD/$R/mod.zip", "sha256": "$ZIPSHA",
                      "files": { "mod/readme.txt": "readme.txt", "mod/sub": "extra" } } ],
@@ -204,13 +206,14 @@ if "$T/kitchen" fetch "$R/recipe" "$R/cache" "$R/recipe/files" >/dev/null; then 
 expect "fetch copies a mapped file" "mod v1" "$(cat "$R/recipe/files/readme.txt" 2>/dev/null)"
 expect "fetch copies a mapped folder" "data" "$(cat "$R/recipe/files/extra/data.txt" 2>/dev/null)"
 win/proxy.sh build "$R/recipe/sound.def" "$R/recipe/files/sound.dll" 2>/dev/null
-tree_md5() { (cd "$1" && find . -type f | LC_ALL=C sort | xargs md5 -q | md5 -q); }
+tree_md5() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 md5 -q | md5 -q); }
 BEFORE=$(tree_md5 "$SRC")
 G="$R/game"; ICONS="$R/icons"
 OUT=$("$T/kitchen" install "$R/recipe" "$SRC" "$G" "$ICONS"); rc=$?
 expect "install exits 0" "0" "$rc"
 expect "source folder untouched" "$BEFORE" "$(tree_md5 "$SRC")"
-if [ ! -e "$G/secdrv.sys" ]; then ok; else bad "excluded file not copied"; fi
+if [ ! -e "$G/secdrv.sys" ] && [ ! -e "$G/TERRAN.ICD" ]; then ok; else bad "excluded files not copied"; fi
+expect "every folder next to excluded files arrives complete" "25" "$(ls "$G"/fx "$G"/techs "$G"/voices "$G"/aa "$G"/zz | grep -c '\.wav$')"
 if [ -e "$G/ddraw.dll.gog" ] && [ ! -e "$G/ddraw.dll" ]; then ok; else bad "ddraw.dll renamed aside"; fi
 expect "original DLL kept as _orig" "$(md5 -q "$SRC/sound.dll")" "$(md5 -q "$G/sound_orig.dll" 2>/dev/null)"
 expect "proxy DLL installed" "$(md5 -q "$R/recipe/files/sound.dll")" "$(md5 -q "$G/sound.dll" 2>/dev/null)"
@@ -250,13 +253,14 @@ A="$T/app/Contents/Resources"; mkdir -p "$A/bin" "$A/prefix/drive_c"
 cp "$T/kitchen" "$A/bin/"; write_recipe verified; win/proxy.sh def "$SRC/sound.dll" > "$R/recipe/sound.def"
 cp -R "$R/recipe" "$A/recipe"
 if bash core/install.sh "$A" "$SRC" >/dev/null; then ok; else bad "core/install.sh exits 0"; fi
-if [ -e "$A/prefix/drive_c/Game/Game.exe" ] && [ "$(readlink "$A/prefix/drive_c/Game")" = "../../game" ]; then ok; else bad "C:\\Game is a relative link to Resources/game"; fi
+if [ -e "$A/prefix/drive_c/Game/Game.exe" ] && [ ! -L "$A/prefix/drive_c/Game" ] && [ "$(readlink "$A/game")" = "prefix/drive_c/Game" ]; then ok; else bad "the game is physically at C:\\Game; Resources/game links to it"; fi
 if [ -s "$A/icon/AppIcon.icns" ]; then ok; else bad "install.sh icons go to Resources/icon"; fi
 bash core/install.sh "$A" "$T/does-not-exist" >/dev/null 2>&1; rc=$?
 expect "install.sh: missing source exits 2" "2" "$rc"
 
 # --- core/launch.sh with a stub wine and a recording kitchen
-L="$PWD/$T/launch/Contents/Resources"; mkdir -p "$L/bin" "$L/wine/bin" "$L/game" "$L/recipe"
+L="$PWD/$T/launch/Contents/Resources"; mkdir -p "$L/bin" "$L/wine/bin" "$L/prefix/drive_c/Game" "$L/recipe"
+ln -s prefix/drive_c/Game "$L/game"
 cp core/launch.sh core/wine-env.sh "$L/bin/"
 cat > "$L/bin/kitchen" <<STUB
 #!/bin/bash
@@ -288,7 +292,7 @@ expect "launch exits with the game's code" "0" "$rc"
 expect "wine runs kitchen-place with the rect and the variant's args" \
     "ARGS: $L/bin/kitchen-place.exe 144 35 1440 1080 -- C:\\Game\\bin\\thinker.exe -smac two words" \
     "$(grep '^ARGS:' "$L/wine.log")"
-expect "wine runs in the game folder" "CWD: $L/game" "$(grep '^CWD:' "$L/wine.log")"
+expect "wine runs in the game's physical folder (C:\\Game, not a Z: path)" "CWD: $L/prefix/drive_c/Game" "$(grep '^CWD:' "$L/wine.log")"
 expect "per-launch INI values written" "$(printf '[thinker]\r\nwindow_width=1440\r\nwindow_height=1080\r\n')" "$(cat "$L/game/thinker.ini")"
 expect "WINEPREFIX is the bundle's" "WINEPREFIX=$L/prefix" "$(grep '^WINEPREFIX=' "$L/wine.log")"
 expect "HOME is inside the bundle" "HOME=$L/home" "$(grep '^HOME=' "$L/wine.log")"
@@ -316,6 +320,28 @@ for f in kitchen kitchen-place.exe install.sh launch.sh wine-env.sh; do
 done
 expect "recipe copied into the bundle" "Kitchen Test" "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['title'])" "$B/Contents/Resources/recipe/recipe.json" 2>/dev/null)"
 if codesign -v "$B" 2>/dev/null; then ok; else bad "bundle seal verifies"; fi
+
+# --- dock-name on a fake CrossOver engine
+E="$T/engine/wine"; mkdir -p "$E/bin" "$E/lib/wine/x86_64-unix"
+PL='<?xml version="1.0"?><plist version="1.0"><dict>
+    <key>CFBundleName</key>
+    <string>WineskinCX23.7.1-4</string>
+    <key>LSUIElement</key>
+    <string>1</string>
+</dict>
+</plist>'
+printf 'MACHO-HEAD %s TAIL' "$PL" > "$E/bin/wine64-preloader"
+printf 'MACHO-HEAD %s TAIL' "$PL" > "$E/bin/wine64"
+printf 'abc\0wine64-preloader\0def' > "$E/lib/wine/x86_64-unix/ntdll.so"
+SIZE_BEFORE=$(stat -f %z "$E/bin/wine64-preloader")
+if "$T/kitchen" dock-name "$E" "Alpha Centauri" >/dev/null 2>&1; then ok; else bad "dock-name exits 0"; fi
+if [ -f "$E/bin/Alpha Centauri" ] && [ "$(readlink "$E/bin/wine64-preloader")" = "Alpha Centauri" ]; then ok; else bad "loader renamed, old name kept as a link"; fi
+expect "ntdll names the new loader (NUL-padded, same size)" "abc|Alpha Centauri|||def" "$(tr '\0' '|' < "$E/lib/wine/x86_64-unix/ntdll.so")"
+if grep -q "<string>Alpha Centauri</string>" "$E/bin/Alpha Centauri" && grep -q "<string>Alpha Centauri</string>" "$E/bin/wine64"; then ok; else bad "CFBundleName set in both loaders"; fi
+expect "loader size unchanged" "$SIZE_BEFORE" "$(stat -f %z "$E/bin/Alpha Centauri")"
+expect "second run changes nothing" "" "$("$T/kitchen" dock-name "$E" "Alpha Centauri" 2>&1)"
+"$T/kitchen" dock-name "$E" "A name longer than sixteen" >/dev/null 2>&1; rc=$?
+expect "a name over 16 bytes is refused" "3" "$rc"
 
 # ini-set on a new file and a missing section
 "$T/kitchen" ini-set "$T/new.ini" Main a=1 b=2

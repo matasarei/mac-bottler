@@ -42,6 +42,10 @@ PLIST
 if [ "$NO_ENGINE" != "--no-engine" ]; then
     core/engine.sh "$ENGINE" "$RES" build/deps
     core/prefix.sh "$RES"
+    # CrossOver engines: the running game shows as the title in the Dock and menu bar
+    if [ "$(. "engines/$ENGINE.env"; echo "$ENGINE_KIND")" = wineskin ]; then
+        "$KITCHEN" dock-name "$RES/wine" "$TITLE" || echo "warning: the Dock will show wine64-preloader"
+    fi
 fi
 
 echo "==> recipe"

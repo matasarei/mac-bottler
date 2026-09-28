@@ -37,7 +37,9 @@ fi
 
 TITLE_ARGS=()
 [ -n "$WIN_TITLE" ] && TITLE_ARGS=(--title "$WIN_TITLE")
-cd "$RES/game" || exit 2
+# the physical folder, which Wine sees as C:\Game: launchers start the game relative
+# to it, and a path through Resources/game would reach Wine as a Z:\ path
+cd "$RES/prefix/drive_c/Game" || exit 2
 # bash 3.2 (macOS): an empty array is "unbound" under set -u, hence ${a[@]+...}
 "$WINE" "$RES/bin/kitchen-place.exe" "$GX" "$GY" "$GW" "$GH" ${TITLE_ARGS[@]+"${TITLE_ARGS[@]}"} \
     -- "$GAME_EXE" ${GAME_ARGS[@]+"${GAME_ARGS[@]}"} >>"$LOG" 2>&1

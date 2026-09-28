@@ -14,5 +14,10 @@ export HOME="$RES/home"
 # them by name; without this, GDI games lose their TrueType text.
 export DYLD_FALLBACK_LIBRARY_PATH="$RES/wine/lib/external:/usr/lib"
 export WINEDEBUG="${WINEDEBUG:--all}"
+# The bundle seal drops the prefix's absolute links; wine needs z: -> / to reach
+# macOS paths (the launch runs kitchen-place.exe by its macOS path).
+if [ -d "$WINEPREFIX/dosdevices" ] && [ ! -e "$WINEPREFIX/dosdevices/z:" ]; then
+    ln -s / "$WINEPREFIX/dosdevices/z:"
+fi
 # Mach-based sync primitives instead of wineserver round trips (both engines support it).
 export WINEMSYNC=1

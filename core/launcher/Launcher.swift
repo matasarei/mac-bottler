@@ -201,5 +201,7 @@ struct LauncherApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    // the window hides while playing; an app quit in that state would reopen hidden
+    func applicationDidFinishLaunching(_ note: Notification) { NSApp.unhide(nil) }
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 }

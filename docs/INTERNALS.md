@@ -57,6 +57,22 @@ found on; the lesson is written so it applies to other games too.
   `ddraw.dll` is loaded even when the game does not use DirectDraw, and its hooks
   cost CPU, so set it aside when the game runs in GDI mode.
 
+## Installing
+
+- **The game must live physically inside the prefix** (`prefix/drive_c/Game`,
+  Windows `C:\Game`). A symlink from `drive_c` to a folder elsewhere in the
+  bundle makes Wine report the game's real location as
+  `Z:\Users\...\Name.app\Contents\...`; launchers that start the game relative
+  to their folder then pass that path on. Launch from the physical folder too.
+- **`FileManager` enumerator trap:** `skipDescendants()` called on a *file*
+  skips the most recently opened folder instead. The first installer lost all of
+  Alpha Centauri's `fx/` (every sound: the game ran silent with DirectSound
+  working) and `techs/`. The installer now only skips folders and checks that
+  every source file arrived.
+- **Games remember absolute paths in their settings** (Alpha Centauri's
+  `Latest Save` pointed at the old install): clear them at install, or the load
+  dialog opens a folder that does not exist.
+
 ## Executables and icons
 
 - **The Dock icon of a running Wine game comes from the running .exe's icon
