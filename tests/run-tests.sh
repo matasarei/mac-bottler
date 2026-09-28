@@ -146,5 +146,24 @@ expect "bad mode exits 2" "2" "$rc"
 "$T/kitchen" geometry 999999 native >/dev/null 2>&1; rc=$?
 expect "unknown display exits 2" "2" "$rc"
 
+# --- win helpers: proxy DLL round trip on a throwaway DLL built here
+X="$T/proxy"; mkdir -p "$X"
+printf 'int __stdcall a(int x){return x;}\nint b(void){return 2;}\nint c(void){return 3;}\n' > "$X/fake.c"
+printf 'LIBRARY fake.dll\nEXPORTS\n  "?mangled@Thing@@QAEXH@Z" = a@4 @7\n  plain_b = b @2\n  third_c = c @5\n' > "$X/fake-src.def"
+i686-w64-mingw32-gcc -shared -o "$X/fake.dll" "$X/fake.c" "$X/fake-src.def" 2>/dev/null || bad "fake DLL builds"
+if win/proxy.sh def "$X/fake.dll" > "$X/fake.def"; then ok; else bad "proxy def exits 0"; fi
+expect "def forwards to fake_orig" "3" "$(grep -c '= fake_orig\.' "$X/fake.def")"
+if win/proxy.sh build "$X/fake.def" "$X/proxy.dll" 2>/dev/null; then ok; else bad "proxy build exits 0"; fi
+expect "proxy export table matches the original" "$(win/proxy.sh exports "$X/fake.dll")" "$(win/proxy.sh exports "$X/proxy.dll")"
+expect "mangled name kept at its ordinal" "7 ?mangled@Thing@@QAEXH@Z" "$(win/proxy.sh exports "$X/proxy.dll" | grep mangled)"
+printf 'LIBRARY noname.dll\nEXPORTS\n  named = b @1\n  hidden = c @2 NONAME\n' > "$X/noname-src.def"
+i686-w64-mingw32-gcc -shared -o "$X/noname.dll" "$X/fake.c" "$X/noname-src.def" 2>/dev/null
+win/proxy.sh def "$X/noname.dll" >/dev/null 2>&1; rc=$?
+expect "unnamed exports are refused" "1" "$rc"
+pe "$X/x64.dll" --64 --imports KERNEL32.dll
+win/proxy.sh def "$X/x64.dll" >/dev/null 2>&1; rc=$?
+expect "64-bit DLLs are refused" "1" "$rc"
+if i686-w64-mingw32-gcc -O2 -mwindows -o "$X/kitchen-place.exe" win/place.c 2>/dev/null; then ok; else bad "place.c builds"; fi
+
 echo "tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
