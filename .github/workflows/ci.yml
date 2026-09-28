@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 6 3 * *"   # monthly: do the pinned downloads still exist?
+  workflow_dispatch:
+
+jobs:
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          brew install mingw-w64 shellcheck
+          python3 -m pip install --break-system-packages --quiet pillow
+      - name: make test
+        run: make test
+      - name: make compile
+        run: make compile
+      - name: make lint
+        run: make lint
+
+  pins:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: make check-pins
+        run: make check-pins

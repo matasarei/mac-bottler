@@ -9,6 +9,8 @@
 #   make helpers                 build the Windows helpers into build/win/
 #   make test                    hermetic tests (synthetic PE files, no game data, no wine)
 #   make compile                 type-check the Swift sources
+#   make lint                    shellcheck the scripts (error level)
+#   make check-pins              every pinned download still exists with its SHA256
 #
 # Targets arrive with the plan's steps (engine, prefix, helpers, app, test,
 # compile, lint); until then they are not listed here.
@@ -18,7 +20,7 @@ ENGINE ?= crossover-23
 RES     = $(APP)/Contents/Resources
 DEPS    = build/deps
 
-.PHONY: help check project app engine prefix helpers test compile
+.PHONY: help check project app engine prefix helpers test compile lint check-pins
 
 help:
 	@sed -n '1,/^$$/p' Makefile | sed 's/^# \{0,1\}//'
@@ -55,3 +57,10 @@ compile:
 	@swiftc -typecheck tools/bottler.swift
 	@swiftc -typecheck -parse-as-library core/launcher/Launcher.swift
 	@echo "==> Swift sources type-check"
+
+lint:
+	@command -v shellcheck >/dev/null || { echo "shellcheck not found: brew install shellcheck"; exit 1; }
+	@shellcheck -S error core/*.sh win/*.sh tests/*.sh && echo "==> shellcheck: no errors"
+
+check-pins:
+	@bash core/check-pins.sh

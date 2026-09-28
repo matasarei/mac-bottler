@@ -41,6 +41,12 @@ projects never touch each other. Everything reusable (engines, a clean prefix pe
 engine, pinned downloads) is cached in `build/cache/` and cloned into each app,
 so a rebuild takes seconds.
 
+## With an agent
+
+In Claude Code, `/cook "/path/to/your/game folder"` runs the whole loop: it scans
+the game, picks or drafts a recipe, builds the app, launches and observes it, and
+fixes what it finds, asking you only about sound and feel. See `.claude/skills/`.
+
 ## Layout
 
 | Path | What |

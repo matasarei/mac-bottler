@@ -51,7 +51,9 @@ with_lock() {  # with_lock <name> <command...>
 }
 
 if [ "$NO_ENGINE" != "--no-engine" ]; then
+    # shellcheck source=/dev/null
     ENGINE_SHA="$(. "engines/$ENGINE.env"; echo "$ENGINE_SHA256")"
+    # shellcheck source=/dev/null
     ENGINE_KIND="$(. "engines/$ENGINE.env"; echo "$ENGINE_KIND")"
     KEY="$ENGINE-${ENGINE_SHA:0:12}"
     ENGINE_CACHE="$CACHE/engines/$KEY"; PREFIX_CACHE="$CACHE/prefixes/$KEY"

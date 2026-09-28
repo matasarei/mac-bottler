@@ -375,6 +375,46 @@ expect "second run changes nothing" "" "$("$T/bottler" dock-name "$E" "Alpha Cen
 "$T/bottler" dock-name "$E" "A name longer than sixteen" >/dev/null 2>&1; rc=$?
 expect "a name over 16 bytes is refused" "3" "$rc"
 
+# --- hints: a fake Lutris API in local files
+H="$PWD/$T/lutris"; mkdir -p "$H/installers"
+cat > "$H/games" <<'JSON'
+{"results": [{"name": "Anachronox", "slug": "anachronox", "year": 2001},
+             {"name": "Nox", "slug": "nox", "year": 2000},
+             {"name": "Nox Archaist", "slug": "nox-archaist", "year": null}]}
+JSON
+cat > "$H/installers/nox" <<'JSON'
+{"results": [{"version": "GOG", "runner": "wine",
+  "script": {"game": {"exe": "drive_c/GOG Games/Nox/NOX.EXE", "args": "-window"},
+             "wine": {"overrides": {"ddraw.dll": "n"}},
+             "installer": [{"task": {"name": "winetricks", "app": "d3dx9"}}, {"move": {}}]}}]}
+JSON
+echo '{"results": []}' > "$H/installers/nox-archaist"
+OUT=$(BOTTLER_LUTRIS_API="file://$H" "$T/bottler" hints nox)
+expect "hints: the exact name comes first" "Nox (2000, lutris.net/games/nox)" "$(echo "$OUT" | head -1)"
+if echo "$OUT" | grep -q 'exe: drive_c/GOG Games/Nox/NOX.EXE' && echo "$OUT" | grep -q 'args: -window'; then ok; else bad "hints show exe and args"; fi
+if echo "$OUT" | grep -q '"ddraw.dll":"n"' && echo "$OUT" | grep -q 'installer: winetricks d3dx9, move'; then ok; else bad "hints show overrides and winetricks"; fi
+expect "hints: order is exact, whole words, then substrings" "Nox|Nox Archaist|Anachronox" \
+    "$(echo "$OUT" | grep -E '^[A-Z]' | sed 's/ (.*//' | paste -sd'|' -)"
+expect "hints: a null year prints as ?" "Nox Archaist (?, lutris.net/games/nox-archaist)" "$(echo "$OUT" | grep '^Nox Archaist')"
+OUT=$(BOTTLER_LUTRIS_API="file://$H/missing" "$T/bottler" hints nox); rc=$?
+if [ $rc -eq 0 ] && echo "$OUT" | grep -q "^warning: Lutris is not reachable"; then ok; else bad "hints: unreachable API is a warning, exit 0"; fi
+
+# --- observing an app: cpu, windows, log, shot (fake app with a busy process)
+F="$PWD/$T/Fake.app"; mkdir -p "$F/Contents/MacOS" "$F/Contents/Resources/logs"
+# a copied system binary is killed by code signing; build a busy loop instead
+echo 'int main(void) { volatile unsigned long n = 0; for (;;) n++; }' | cc -x c -O0 -o "$F/Contents/MacOS/busy" -
+"$F/Contents/MacOS/busy" & BUSY=$!
+CPU=$("$T/bottler" cpu "$F" 1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(int(d[0]['cpu']) if d and d[0]['name']=='busy' else -1)")
+kill $BUSY 2>/dev/null; wait $BUSY 2>/dev/null
+if [ "$CPU" -ge 70 ] && [ "$CPU" -le 130 ]; then ok; else bad "cpu reports a busy process near one core, got $CPU"; fi
+expect "cpu with nothing running is an empty list" "[" "$("$T/bottler" cpu "$F" 0.2 | head -c 1)"
+expect "a windowless app has no windows" "0" "$("$T/bottler" windows "$F" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")"
+"$T/bottler" log "$F" >/dev/null 2>&1; rc=$?; expect "log without a launch log exits 2" "2" "$rc"
+echo "line one" > "$F/Contents/Resources/logs/last-launch.log"
+expect "log prints the launch log" "line one" "$("$T/bottler" log "$F")"
+"$T/bottler" shot "$T/none.png" --app "$F" >/dev/null 2>&1; rc=$?; expect "shot of an app without windows exits 2" "2" "$rc"
+"$T/bottler" windows "$T/not-an-app" >/dev/null 2>&1; rc=$?; expect "windows on a non-app exits 2" "2" "$rc"
+
 # ini-set on a new file and a missing section
 "$T/bottler" ini-set "$T/new.ini" Main a=1 b=2
 expect "ini-set creates file and section" "$(printf '[Main]\na=1\nb=2\n')" "$(cat "$T/new.ini")"

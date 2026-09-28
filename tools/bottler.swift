@@ -2,6 +2,7 @@
 // Resources/bin/bottler and used by the build, the installer and agents.
 //
 //   bottler scan <dir>                       JSON report on a game folder's executables
+//   bottler hints <game name>                what Lutris' installer scripts know (hints only)
 //   bottler icon <exe> <out-dir>             rounded macOS icon from the exe's own icon
 //   bottler exe-icon <exe> <png-dir> <out>   put that icon into a copy of the exe, in place
 //   bottler displays                         JSON list of the connected displays
@@ -23,6 +24,14 @@
 //   bottler ini-set <file> <section> key=value...   edit an INI file (CRLF kept)
 //   bottler dock-name <wine dir> <name>      CrossOver engines: the running game shows
 //                                            as <name> in the Dock and the menu bar
+//
+// Observing a running app (for agents; all read-only except click):
+//   bottler windows <app>                    JSON: the app's windows (owner, pid, bounds, on screen)
+//   bottler shot <out.png> [--app <app> | --window <n> | --rect x,y,w,h]
+//                                            screenshot (default: the whole main display)
+//   bottler cpu <app> [seconds]              JSON: CPU % per process of the app over an interval
+//   bottler click <x> <y>                    a left click at screen point x,y
+//   bottler log <app>                        the last launch log
 //
 // Subcommands are added as recipes need them (docs/RECIPES.md).
 import Foundation
@@ -1286,6 +1295,155 @@ func dockName(wine: URL, name: String) throws {
     }
 }
 
+
+
+// MARK: - hints (Lutris)
+
+/// Lutris' public API: games by name, then each game's community installer scripts.
+/// Printed as hints for a recipe, never applied. BOTTLER_LUTRIS_API replaces the
+/// API root (tests point it at local files).
+func lutrisHints(_ name: String) -> String {
+    let api = ProcessInfo.processInfo.environment["BOTTLER_LUTRIS_API"] ?? "https://lutris.net/api"
+    func get(_ path: String) -> Any? {
+        guard let url = URL(string: api + path) else { return nil }
+        if url.isFileURL { return (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) } }
+        var req = URLRequest(url: url, timeoutInterval: 15)
+        req.setValue("mac-bottler", forHTTPHeaderField: "User-Agent")
+        let done = DispatchSemaphore(value: 0)
+        var body: Data?
+        URLSession.shared.dataTask(with: req) { data, response, _ in
+            if (response as? HTTPURLResponse)?.statusCode == 200 { body = data }
+            done.signal()
+        }.resume()
+        done.wait()
+        return body.flatMap { try? JSONSerialization.jsonObject(with: $0) }
+    }
+    let query = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? name
+    guard let found = get("/games?search=\(query)") as? [String: Any], let games = found["results"] as? [[String: Any]] else {
+        return "warning: Lutris is not reachable; no hints (nothing else depends on them)\n"
+    }
+    // exact name, then all query words as whole words, then substrings; among
+    // equals, fewer extra words first
+    func words(_ s: String) -> [String] {
+        s.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+    }
+    let wanted = words(name)
+    func score(_ g: [String: Any]) -> (Int, Int) {
+        let n = g["name"] as? String ?? "", w = words(n)
+        if w == wanted { return (3, 0) }
+        if wanted.allSatisfy(w.contains) { return (2, -(w.count - wanted.count)) }
+        if wanted.allSatisfy({ q in n.lowercased().contains(q) }) { return (1, -(w.count - wanted.count)) }
+        return (0, 0)
+    }
+    let matches = games.filter { score($0).0 > 0 }.sorted { score($0) > score($1) }.prefix(5)
+    guard !matches.isEmpty else { return "no Lutris game matches \"\(name)\"\n" }
+    var out = ""
+    for g in matches {
+        let slug = g["slug"] as? String ?? ""
+        let year = (g["year"] as? Int).map(String.init) ?? "?"
+        out += "\(g["name"] as? String ?? slug) (\(year), lutris.net/games/\(slug))\n"
+        guard let inst = get("/installers/\(slug)") as? [String: Any], let list = inst["results"] as? [[String: Any]], !list.isEmpty else {
+            out += "  no installer scripts\n"; continue
+        }
+        for i in list {
+            let script = i["script"] as? [String: Any] ?? [:]
+            let game = script["game"] as? [String: Any] ?? [:]
+            out += "  - \(i["version"] as? String ?? "?") (runner: \(i["runner"] as? String ?? "?"))\n"
+            if let exe = game["exe"] { out += "      exe: \(exe)\n" }
+            if let args = game["args"] { out += "      args: \(args)\n" }
+            for key in ["wine", "system"] {
+                if let v = script[key], !(v is NSNull),
+                   let d = try? JSONSerialization.data(withJSONObject: v, options: [.sortedKeys]) {
+                    out += "      \(key): \(String(decoding: d, as: UTF8.self))\n"
+                }
+            }
+            let tasks = (script["installer"] as? [Any] ?? []).compactMap { t -> String? in
+                guard let d = t as? [String: Any], let k = d.keys.first else { return nil }
+                if k == "task", let task = d[k] as? [String: Any] {
+                    let what = task["name"] as? String ?? "task"
+                    return what == "winetricks" ? "winetricks \(task["app"] as? String ?? "")" : what
+                }
+                return k
+            }
+            if !tasks.isEmpty { out += "      installer: \(tasks.joined(separator: ", "))\n" }
+        }
+    }
+    return out
+}
+
+// MARK: - observing a running app (agents)
+
+/// The app bundle's resolved path with a trailing slash; every process of the app
+/// (launcher, wine, the game, helpers) runs an executable under it.
+func appRoot(_ path: String) throws -> String {
+    let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+    guard FileManager.default.fileExists(atPath: url.appendingPathComponent("Contents").path) else {
+        throw PEError(message: "not an app bundle: \(path)")
+    }
+    return url.path + "/"
+}
+
+struct WindowInfo {
+    let number: Int, owner: String, pid: pid_t, title: String, frame: CGRect, layer: Int, onScreen: Bool
+    var json: [String: Any] {
+        ["number": number, "owner": owner, "pid": pid, "title": title, "layer": layer, "onScreen": onScreen,
+         "frame": [frame.minX, frame.minY, frame.width, frame.height]]
+    }
+}
+
+/// Windows of processes running from `root` (titles need Screen Recording permission).
+func appWindows(_ root: String) -> [WindowInfo] {
+    let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    return list.compactMap { w in
+        guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, processPath(pid).hasPrefix(root),
+              let n = w[kCGWindowNumber as String] as? Int, let b = w[kCGWindowBounds as String] as? [String: CGFloat] else { return nil }
+        let frame = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+        guard frame.width >= 50, frame.height >= 50 else { return nil }   // skip status-item slivers
+        return WindowInfo(number: n, owner: w[kCGWindowOwnerName as String] as? String ?? "", pid: pid,
+                          title: w[kCGWindowName as String] as? String ?? "", frame: frame,
+                          layer: w[kCGWindowLayer as String] as? Int ?? 0,
+                          onScreen: (w[kCGWindowIsOnscreen as String] as? Bool) ?? false)
+    }
+}
+
+/// Total CPU time used by a process, in nanoseconds.
+func cpuNanos(_ pid: pid_t) -> UInt64? {
+    var info = rusage_info_v2()
+    let ok = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V2, $0) }
+    }
+    guard ok == 0 else { return nil }
+    var tb = mach_timebase_info_data_t(); mach_timebase_info(&tb)
+    return (info.ri_user_time + info.ri_system_time) * UInt64(tb.numer) / UInt64(tb.denom)
+}
+
+/// CPU % per process of the app, measured over `seconds` (100 = one full core).
+func appCPU(_ root: String, seconds: Double) -> [[String: Any]] {
+    let pids = processes(under: root)
+    let before = Dictionary(uniqueKeysWithValues: pids.compactMap { p in cpuNanos(p).map { (p, $0) } })
+    Thread.sleep(forTimeInterval: seconds)
+    return pids.compactMap { p -> [String: Any]? in
+        guard let a = before[p], let b = cpuNanos(p) else { return nil }
+        let pct = Double(b &- a) / (seconds * 1e9) * 100
+        let path = processPath(p)
+        return ["pid": p, "cpu": (pct * 10).rounded() / 10,
+                "process": String(path.dropFirst(root.count)), "name": (path as NSString).lastPathComponent]
+    }.sorted { ($0["cpu"] as! Double) > ($1["cpu"] as! Double) }
+}
+
+func click(_ x: Double, _ y: Double) {
+    let p = CGPoint(x: x, y: y)
+    for t in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+        CGEvent(mouseEventSource: nil, mouseType: t, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+        usleep(120_000)
+    }
+}
+
+func printJSON(_ v: Any) {
+    let json = try! JSONSerialization.data(withJSONObject: v, options: [.prettyPrinted, .sortedKeys])
+    FileHandle.standardOutput.write(json + "\n".data(using: .utf8)!)
+}
+
 // MARK: - main
 
 func fail(_ message: String) -> Never {
@@ -1394,6 +1552,45 @@ case "dock-name":
         FileHandle.standardError.write("bottler dock-name: refused: \(e.message)\n".data(using: .utf8)!)
         exit(3)
     } catch { fail("bottler dock-name: \(error)") }
+case "hints":
+    guard args.count >= 3 else { fail("usage: bottler hints <game name>") }
+    print(lutrisHints(args.dropFirst(2).joined(separator: " ")), terminator: "")
+case "windows":
+    guard args.count == 3 else { fail("usage: bottler windows <app>") }
+    do { printJSON(appWindows(try appRoot(args[2])).map { $0.json }) } catch { fail("bottler windows: \(error)") }
+case "cpu":
+    guard args.count == 3 || args.count == 4 else { fail("usage: bottler cpu <app> [seconds]") }
+    do { printJSON(appCPU(try appRoot(args[2]), seconds: args.count == 4 ? Double(args[3]) ?? 3 : 3)) }
+    catch { fail("bottler cpu: \(error)") }
+case "shot":
+    guard args.count == 3 || args.count == 5 else { fail("usage: bottler shot <out.png> [--app <app> | --window <n> | --rect x,y,w,h]") }
+    var captureArgs = ["-x"]
+    do {
+        if args.count == 5 {
+            switch args[3] {
+            case "--window": captureArgs += ["-o", "-l", args[4]]
+            case "--rect":
+                let r = try rect(args[4]); captureArgs += ["-R\(Int(r.minX)),\(Int(r.minY)),\(Int(r.width)),\(Int(r.height))"]
+            case "--app":
+                guard let w = appWindows(try appRoot(args[4])).filter({ $0.onScreen && $0.layer == 0 })
+                        .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
+                    fail("bottler shot: the app has no window on screen")
+                }
+                captureArgs += ["-R\(Int(w.frame.minX)),\(Int(w.frame.minY)),\(Int(w.frame.width)),\(Int(w.frame.height))"]
+            default: fail("bottler shot: unknown option \(args[3])")
+            }
+        }
+        try run("/usr/sbin/screencapture", captureArgs + [args[2]])
+        print(args[2])
+    } catch { fail("bottler shot: \(error) (the terminal needs Screen Recording permission)") }
+case "click":
+    guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]) else { fail("usage: bottler click <x> <y>") }
+    click(x, y)
+case "log":
+    guard args.count == 3 else { fail("usage: bottler log <app>") }
+    let log = URL(fileURLWithPath: args[2]).appendingPathComponent("Contents/Resources/logs/last-launch.log")
+    guard let text = try? String(contentsOf: log, encoding: .utf8) else { fail("bottler log: no launch log yet at \(log.path)") }
+    print(text, terminator: "")
 case "recipe-check":
     guard args.count == 3 else { fail("usage: bottler recipe-check <recipe.json>") }
     let errors = checkRecipe(URL(fileURLWithPath: args[2]))

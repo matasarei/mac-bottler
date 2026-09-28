@@ -23,6 +23,14 @@ work and the traps already hit; read it first), `docs/RECIPES.md` (recipe schema
 - **Record what was tried.** Every attempt on a game, including the ones that
   failed and why, goes into `recipes/<game>/notes.md`.
 
+## Skills
+
+- `/cook <game folder>`: bottle a game end to end (scan, recipe, build, launch,
+  observe, fix). `/diagnose <symptom>`: known causes and how to confirm them.
+  `/improve-bottler <problem>`: generic fixes, test first, as a pull request.
+- The observe tools (`bottler windows|shot|cpu|click|log <app>`) are how an
+  agent sees a running game; ask the user only for sound and feel.
+
 ## Pull requests and releases
 
 - Work on a branch; open a pull request with what was verified and how.
