@@ -102,10 +102,13 @@ final class Model: ObservableObject {
         busy = true; error = ""; playing = true
         let w = window
         w?.orderOut(nil)
+        // out of the Dock while the game runs: the game is the one tile there
+        NSApp.setActivationPolicy(.accessory)
         runScript("launch.sh", [resources.path, String(variant), display], output: { _ in }, done: { [weak self] code, _ in
             guard let self else { return }
             self.busy = false; playing = false
             if code == 2 { self.error = "The game could not be started. See Contents/Resources/logs/last-launch.log." }
+            NSApp.setActivationPolicy(.regular)
             w?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         })
