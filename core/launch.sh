@@ -1,16 +1,16 @@
 #!/bin/bash
-# Start the game of an app built by the kitchen, as its recipe says.
+# Start the game of an app built by mac-bottler, as its recipe says.
 # usage: launch.sh <Resources dir> [variant index] [display id | main]
-# Computes the window for the display (kitchen prepare-launch, which also writes
+# Computes the window for the display (bottler prepare-launch, which also writes
 # the recipe's per-launch INI values), hides the menu bar and shows the black
-# backdrop if the recipe asks, runs the game through kitchen-place.exe, and
+# backdrop if the recipe asks, runs the game through bottler-place.exe, and
 # restores the menu bar however the game ends. Log: Resources/logs/last-launch.log
 set -uo pipefail
 RES="$(cd "$1" && pwd)"; VARIANT="${2:-0}"; DISPLAY_ID="${3:-main}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=core/wine-env.sh
 source "$HERE/wine-env.sh"
-KITCHEN="$RES/bin/kitchen"
+KITCHEN="$RES/bin/bottler"
 mkdir -p "$RES/logs"
 LOG="$RES/logs/last-launch.log"
 : > "$LOG"
@@ -41,7 +41,7 @@ TITLE_ARGS=()
 # to it, and a path through Resources/game would reach Wine as a Z:\ path
 cd "$RES/prefix/drive_c/Game" || exit 2
 # bash 3.2 (macOS): an empty array is "unbound" under set -u, hence ${a[@]+...}
-"$WINE" "$RES/bin/kitchen-place.exe" "$GX" "$GY" "$GW" "$GH" ${TITLE_ARGS[@]+"${TITLE_ARGS[@]}"} \
+"$WINE" "$RES/bin/bottler-place.exe" "$GX" "$GY" "$GW" "$GH" ${TITLE_ARGS[@]+"${TITLE_ARGS[@]}"} \
     -- "$GAME_EXE" ${GAME_ARGS[@]+"${GAME_ARGS[@]}"} >>"$LOG" 2>&1
 RC=$?
 "$(dirname "$WINE")/wineserver" -w >>"$LOG" 2>&1   # let the whole session end first

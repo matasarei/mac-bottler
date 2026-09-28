@@ -1,10 +1,10 @@
-/* kitchen-place: start a game and keep its window at a target rect.
+/* bottler-place: start a game and keep its window at a target rect.
  *
- *   kitchen-place.exe <x> <y> <w> <h> [--title <text>] -- <exe> [args...]
+ *   bottler-place.exe <x> <y> <w> <h> [--title <text>] -- <exe> [args...]
  *
  * Runs inside the game's Wine session, where one Windows program may move
  * another's window without any macOS permission. The rect comes from
- * `kitchen geometry` (Win32 virtual-screen coordinates). The game window is the
+ * `bottler geometry` (Win32 virtual-screen coordinates). The game window is the
  * largest visible top-level window in the session other than this program's,
  * optionally only those whose title contains --title; a game started through a
  * launcher (a different process) is found the same way. A window of another
@@ -12,7 +12,7 @@
  * their window back (Thinker does after a movie). Exits when the window is gone
  * after having been seen, or if none appears within 3 minutes.
  *
- * Build: i686-w64-mingw32-gcc -O2 -mwindows -o kitchen-place.exe place.c
+ * Build: i686-w64-mingw32-gcc -O2 -mwindows -o bottler-place.exe place.c
  */
 #include <windows.h>
 #include <stdio.h>
@@ -59,7 +59,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--title") && i + 1 < argc) title = argv[++i];
     }
     if (argc < 7 || sep < 0 || sep + 1 >= argc) {
-        fprintf(stderr, "usage: kitchen-place.exe <x> <y> <w> <h> [--title <text>] -- <exe> [args...]\n");
+        fprintf(stderr, "usage: bottler-place.exe <x> <y> <w> <h> [--title <text>] -- <exe> [args...]\n");
         return 2;
     }
     int x = atoi(argv[1]), y = atoi(argv[2]), w = atoi(argv[3]), h = atoi(argv[4]);
@@ -75,7 +75,7 @@ int main(int argc, char **argv)
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
     if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        fprintf(stderr, "kitchen-place: cannot start %s (error %lu)\n", argv[sep + 1], GetLastError());
+        fprintf(stderr, "bottler-place: cannot start %s (error %lu)\n", argv[sep + 1], GetLastError());
         return 1;
     }
     CloseHandle(pi.hThread);

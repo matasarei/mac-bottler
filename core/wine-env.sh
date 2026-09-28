@@ -15,7 +15,7 @@ export HOME="$RES/home"
 export DYLD_FALLBACK_LIBRARY_PATH="$RES/wine/lib/external:/usr/lib"
 export WINEDEBUG="${WINEDEBUG:--all}"
 # The bundle seal drops the prefix's absolute links; wine needs z: -> / to reach
-# macOS paths (the launch runs kitchen-place.exe by its macOS path).
+# macOS paths (the launch runs bottler-place.exe by its macOS path).
 if [ -d "$WINEPREFIX/dosdevices" ] && [ ! -e "$WINEPREFIX/dosdevices/z:" ]; then
     ln -s / "$WINEPREFIX/dosdevices/z:"
 fi

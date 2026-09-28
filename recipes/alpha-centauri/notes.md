@@ -31,7 +31,7 @@ will not run Thinker: apply the official 2.0 patch first.
 ## Display
 
 - Thinker's windowed mode (`video_mode=2`) is borderless and placed at the
-  top-left; `kitchen-place.exe` centres it, `kitchen frame` puts black behind it,
+  top-left; `bottler-place.exe` centres it, `bottler frame` puts black behind it,
   the menu bar auto-hides while playing.
 - Centring breaks edge scrolling: the game compares `GetCursorPos` (screen
   coordinates) with its window size. The game's own `soundx.dll` (loaded from
@@ -48,7 +48,7 @@ will not run Thinker: apply the official 2.0 patch first.
 
 - The app icon comes from `terran.exe` (the original planet, 48 px, scaled x18
   with no smoothing). The Dock shows the icon of the running exe, so the same
-  icon is written into `terranx.exe` in place (`kitchen exe-icon`); rcedit's
+  icon is written into `terranx.exe` in place (`bottler exe-icon`); rcedit's
   full rebuild made the game crash (self-modifying code sections).
 
 ## Engine

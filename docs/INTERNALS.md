@@ -30,7 +30,7 @@ found on; the lesson is written so it applies to other games too.
   ignored on macOS (checked in the Wine master source: the Mac driver's desktop
   window is always the real screen; only winex11 has a `desktop.c`). A game's
   window is a real macOS window, so "4:3 with black borders" needs our own
-  backdrop behind it (`kitchen frame`). *Alpha Centauri.*
+  backdrop behind it (`bottler frame`). *Alpha Centauri.*
 - **The macOS menu bar hides only for windows that cover the whole screen.** A
   pillarboxed window never does, so the launcher turns on the global "automatically
   hide the menu bar" preference for the session and restores it on quit (with a

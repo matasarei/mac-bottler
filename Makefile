@@ -1,4 +1,4 @@
-# wine-kitchen: build a standalone macOS app for a Windows game from a recipe.
+# mac-bottler: build a standalone macOS app for a Windows game from a recipe.
 # See README.md. make is the only entry point; scripts under core/ are internal.
 #
 #   make check                   verify the build prerequisites
@@ -12,7 +12,7 @@
 # Targets arrive with the plan's steps (engine, prefix, helpers, app, test,
 # compile, lint); until then they are not listed here.
 
-APP    ?= build/kitchen-test.app
+APP    ?= build/bottler-test.app
 ENGINE ?= crossover-23
 RES     = $(APP)/Contents/Resources
 DEPS    = build/deps
@@ -39,14 +39,14 @@ test:
 
 helpers:
 	@mkdir -p build/win
-	@i686-w64-mingw32-gcc -O2 -mwindows -o build/win/kitchen-place.exe win/place.c
-	@echo "==> build/win/kitchen-place.exe"
+	@i686-w64-mingw32-gcc -O2 -mwindows -o build/win/bottler-place.exe win/place.c
+	@echo "==> build/win/bottler-place.exe"
 
 app:
 	@[ -n "$(RECIPE)" ] || { echo "usage: make app RECIPE=recipes/<game> [APP=<path>]"; exit 2; }
-	@core/build-app.sh "$(RECIPE)" "$(filter-out build/kitchen-test.app,$(APP))"
+	@core/build-app.sh "$(RECIPE)" "$(filter-out build/bottler-test.app,$(APP))"
 
 compile:
-	@swiftc -typecheck tools/kitchen.swift
+	@swiftc -typecheck tools/bottler.swift
 	@swiftc -typecheck -parse-as-library core/launcher/Launcher.swift
 	@echo "==> Swift sources type-check"

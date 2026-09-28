@@ -1,27 +1,27 @@
-// kitchen: the wine-kitchen command-line tool. Built into every app as
-// Resources/bin/kitchen and used by the build, the installer and agents.
+// bottler: the mac-bottler command-line tool. Built into every app as
+// Resources/bin/bottler and used by the build, the installer and agents.
 //
-//   kitchen scan <dir>                       JSON report on a game folder's executables
-//   kitchen icon <exe> <out-dir>             rounded macOS icon from the exe's own icon
-//   kitchen exe-icon <exe> <png-dir> <out>   put that icon into a copy of the exe, in place
-//   kitchen displays                         JSON list of the connected displays
-//   kitchen geometry <display|main> <mode> [align]
+//   bottler scan <dir>                       JSON report on a game folder's executables
+//   bottler icon <exe> <out-dir>             rounded macOS icon from the exe's own icon
+//   bottler exe-icon <exe> <png-dir> <out>   put that icon into a copy of the exe, in place
+//   bottler displays                         JSON list of the connected displays
+//   bottler geometry <display|main> <mode> [align]
 //                                            where the game window goes, in Win32
 //                                            coordinates: "x y width height"
-//   kitchen frame <display|main> <pid | --wine <Resources>>
+//   bottler frame <display|main> <pid | --wine <Resources>>
 //                                            black backdrop behind the game's window
-//   kitchen prepare-launch <Resources> <variant> <display|main>
+//   bottler prepare-launch <Resources> <variant> <display|main>
 //                                            geometry + per-launch INI edits; prints
 //                                            shell variables for core/launch.sh
-//   kitchen menubar hide|restore <marker>    auto-hide the menu bar while playing
-//   kitchen recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
-//   kitchen recipe-field <recipe.json> <field>   one value for the build: title,
+//   bottler menubar hide|restore <marker>    auto-hide the menu bar while playing
+//   bottler recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
+//   bottler recipe-field <recipe.json> <field>   one value for the build: title,
 //                                            bundleId, engine, proxy.dll, proxy.def
-//   kitchen fetch <recipe-dir> <cache> <out> build time: pinned downloads into <out>
-//   kitchen install <recipe-dir> <source> <game-dir> <icon-dir>
+//   bottler fetch <recipe-dir> <cache> <out> build time: pinned downloads into <out>
+//   bottler install <recipe-dir> <source> <game-dir> <icon-dir>
 //                                            copy the player's game and apply the recipe
-//   kitchen ini-set <file> <section> key=value...   edit an INI file (CRLF kept)
-//   kitchen dock-name <wine dir> <name>      CrossOver engines: the running game shows
+//   bottler ini-set <file> <section> key=value...   edit an INI file (CRLF kept)
+//   bottler dock-name <wine dir> <name>      CrossOver engines: the running game shows
 //                                            as <name> in the Dock and the menu bar
 //
 // Subcommands are added as recipes need them (docs/RECIPES.md).
@@ -636,7 +636,7 @@ func pickScreen(_ which: String, _ screens: [Screen]) throws -> Screen {
     guard !screens.isEmpty else { throw PEError(message: "no displays") }
     if which == "main" { return screens[0] }
     guard let id = UInt32(which), let s = screens.first(where: { $0.id == id }) else {
-        throw PEError(message: "no display \(which) (see kitchen displays)")
+        throw PEError(message: "no display \(which) (see bottler displays)")
     }
     return s
 }
@@ -1158,8 +1158,8 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
     let stamp = try JSONSerialization.data(withJSONObject: [
         "recipe": recipe.title, "fingerprint": fingerprint, "build": build?.status ?? "unknown",
     ], options: [.prettyPrinted, .sortedKeys])
-    let stampURL = game.appendingPathComponent(".kitchen-install.json")
-    if (try? Data(contentsOf: stampURL)) != stamp { try stamp.write(to: stampURL); note("wrote .kitchen-install.json") }
+    let stampURL = game.appendingPathComponent(".bottler-install.json")
+    if (try? Data(contentsOf: stampURL)) != stamp { try stamp.write(to: stampURL); note("wrote .bottler-install.json") }
     return changes
 }
 
@@ -1171,7 +1171,7 @@ func shq(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'
 
 /// Resolve the recipe's launch for one variant on one display: compute the window
 /// rect, apply the per-launch INI edits ({x} {y} {w} {h}), and return shell
-/// variable assignments for core/launch.sh. KITCHEN_TEST_SCREENS="frame;visible;safeTop;primary"
+/// variable assignments for core/launch.sh. BOTTLER_TEST_SCREENS="frame;visible;safeTop;primary"
 /// replaces the real displays (tests).
 func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
     let recipe = try loadRecipe(res.appendingPathComponent("recipe/recipe.json"))
@@ -1180,9 +1180,9 @@ func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
     }
     let v = recipe.launch.variants[variant], w = recipe.launch.window
     let screen: Screen, primary: Screen
-    if let t = ProcessInfo.processInfo.environment["KITCHEN_TEST_SCREENS"] {
+    if let t = ProcessInfo.processInfo.environment["BOTTLER_TEST_SCREENS"] {
         let p = t.split(separator: ";").map(String.init)
-        guard p.count == 4 else { throw PEError(message: "KITCHEN_TEST_SCREENS needs 4 parts") }
+        guard p.count == 4 else { throw PEError(message: "BOTTLER_TEST_SCREENS needs 4 parts") }
         screen = Screen(id: 0, name: "test", frame: try rect(p[0]), visible: try rect(p[1]), safeTop: CGFloat(Double(p[2]) ?? 0))
         primary = Screen(id: 0, name: "primary", frame: try rect(p[3]), visible: try rect(p[3]), safeTop: 0)
     } else {
@@ -1297,31 +1297,31 @@ func fail(_ message: String) -> Never {
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "" {
 case "scan":
-    guard args.count == 3 else { fail("usage: kitchen scan <dir>") }
+    guard args.count == 3 else { fail("usage: bottler scan <dir>") }
     var isDir: ObjCBool = false
     guard FileManager.default.fileExists(atPath: args[2], isDirectory: &isDir), isDir.boolValue else {
-        fail("kitchen scan: not a folder: \(args[2])")
+        fail("bottler scan: not a folder: \(args[2])")
     }
     do {
         let report = try scan(URL(fileURLWithPath: args[2]).standardizedFileURL)
         let json = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         FileHandle.standardOutput.write(json + "\n".data(using: .utf8)!)
     } catch {
-        fail("kitchen scan: \(error)")
+        fail("bottler scan: \(error)")
     }
 case "icon":
-    guard args.count == 4 else { fail("usage: kitchen icon <exe> <out-dir>") }
+    guard args.count == 4 else { fail("usage: bottler icon <exe> <out-dir>") }
     do { try makeIcons(exe: URL(fileURLWithPath: args[2]), out: URL(fileURLWithPath: args[3])) }
-    catch { fail("kitchen icon: \(error)") }
+    catch { fail("bottler icon: \(error)") }
 case "exe-icon":
-    guard args.count == 5 else { fail("usage: kitchen exe-icon <exe> <png-dir> <out-exe>") }
+    guard args.count == 5 else { fail("usage: bottler exe-icon <exe> <png-dir> <out-exe>") }
     do {
         try patchExeIcon(exe: URL(fileURLWithPath: args[2]), pngDir: URL(fileURLWithPath: args[3]),
                          out: URL(fileURLWithPath: args[4]))
     } catch let e as RefusedError {
-        FileHandle.standardError.write("kitchen exe-icon: refused: \(e.message)\n".data(using: .utf8)!)
+        FileHandle.standardError.write("bottler exe-icon: refused: \(e.message)\n".data(using: .utf8)!)
         exit(3)
-    } catch { fail("kitchen exe-icon: \(error)") }
+    } catch { fail("bottler exe-icon: \(error)") }
 case "displays":
     let list: [[String: Any]] = connectedScreens().enumerated().map { i, s in
         ["id": s.id, "name": s.name, "main": i == 0,
@@ -1332,30 +1332,30 @@ case "displays":
     let json = try! JSONSerialization.data(withJSONObject: list, options: [.prettyPrinted, .sortedKeys])
     FileHandle.standardOutput.write(json + "\n".data(using: .utf8)!)
 case "geometry":
-    // kitchen geometry <display|main> <mode> [align]
-    // test form: kitchen geometry --screen x,y,w,h --visible x,y,w,h --safe-top n --primary x,y,w,h <mode> [align]
+    // bottler geometry <display|main> <mode> [align]
+    // test form: bottler geometry --screen x,y,w,h --visible x,y,w,h --safe-top n --primary x,y,w,h <mode> [align]
     do {
         var rest = Array(args.dropFirst(2))
         var screen: Screen, primary: Screen
         if rest.first == "--screen" {
-            guard rest.count >= 9 else { fail("usage: kitchen geometry --screen R --visible R --safe-top N --primary R <mode> [align]") }
+            guard rest.count >= 9 else { fail("usage: bottler geometry --screen R --visible R --safe-top N --primary R <mode> [align]") }
             screen = Screen(id: 0, name: "test", frame: try rect(rest[1]), visible: try rect(rest[3]),
                             safeTop: CGFloat(Double(rest[5]) ?? 0))
             primary = Screen(id: 0, name: "primary", frame: try rect(rest[7]), visible: try rect(rest[7]), safeTop: 0)
             rest = Array(rest.dropFirst(8))
         } else {
-            guard rest.count >= 2 else { fail("usage: kitchen geometry <display|main> <mode> [align]") }
+            guard rest.count >= 2 else { fail("usage: bottler geometry <display|main> <mode> [align]") }
             let screens = connectedScreens()
             screen = try pickScreen(rest[0], screens); primary = screens[0]
             rest = Array(rest.dropFirst(1))
         }
-        guard let mode = rest.first else { fail("kitchen geometry: missing mode") }
+        guard let mode = rest.first else { fail("bottler geometry: missing mode") }
         let align = rest.count > 1 ? Int(rest[1]) ?? 1 : 1
         let r = try gameRect(screen: screen, primary: primary, mode: mode, align: align)
         print("\(r.x) \(r.y) \(r.w) \(r.h)")
-    } catch { fail("kitchen geometry: \(error)") }
+    } catch { fail("bottler geometry: \(error)") }
 case "frame":
-    let usage = "usage: kitchen frame <display|main> <pid | --wine <Resources>>"
+    let usage = "usage: bottler frame <display|main> <pid | --wine <Resources>>"
     var pid: pid_t?, wineRoot: String?
     if args.count == 4, let p = pid_t(args[3]) { pid = p }
     else if args.count == 5, args[3] == "--wine" {
@@ -1368,16 +1368,16 @@ case "frame":
         let keeper = FrameKeeper(pid: pid, wineRoot: wineRoot, screenFrame: screen.frame)
         app.delegate = keeper
         app.run()
-    } catch { fail("kitchen frame: \(error)") }
+    } catch { fail("bottler frame: \(error)") }
 case "menubar":
-    guard args.count == 4 else { fail("usage: kitchen menubar hide|restore <marker>") }
-    do { try menubar(args[2], marker: args[3]) } catch { fail("kitchen menubar: \(error)") }
+    guard args.count == 4 else { fail("usage: bottler menubar hide|restore <marker>") }
+    do { try menubar(args[2], marker: args[3]) } catch { fail("bottler menubar: \(error)") }
 case "prepare-launch":
-    guard args.count == 5, let variant = Int(args[3]) else { fail("usage: kitchen prepare-launch <Resources> <variant> <display|main>") }
+    guard args.count == 5, let variant = Int(args[3]) else { fail("usage: bottler prepare-launch <Resources> <variant> <display|main>") }
     do { print(try prepareLaunch(res: URL(fileURLWithPath: args[2]), variant: variant, display: args[4])) }
-    catch { fail("kitchen prepare-launch: \(error)") }
+    catch { fail("bottler prepare-launch: \(error)") }
 case "recipe-field":
-    guard args.count == 4 else { fail("usage: kitchen recipe-field <recipe.json> <field>") }
+    guard args.count == 4 else { fail("usage: bottler recipe-field <recipe.json> <field>") }
     do {
         let r = try loadRecipe(URL(fileURLWithPath: args[2]))
         switch args[3] {
@@ -1386,43 +1386,43 @@ case "recipe-field":
         case "engine": print(r.engine)
         case "proxy.dll": print(r.install?.proxy?.dll ?? "")
         case "proxy.def": print(r.install?.proxy?.def ?? "")
-        default: fail("kitchen recipe-field: unknown field \(args[3])")
+        default: fail("bottler recipe-field: unknown field \(args[3])")
         }
-    } catch { fail("kitchen recipe-field: \(error)") }
+    } catch { fail("bottler recipe-field: \(error)") }
 case "dock-name":
-    guard args.count == 4 else { fail("usage: kitchen dock-name <wine dir> <name>") }
+    guard args.count == 4 else { fail("usage: bottler dock-name <wine dir> <name>") }
     do { try dockName(wine: URL(fileURLWithPath: args[2]), name: args[3]) }
     catch let e as RefusedError {
-        FileHandle.standardError.write("kitchen dock-name: refused: \(e.message)\n".data(using: .utf8)!)
+        FileHandle.standardError.write("bottler dock-name: refused: \(e.message)\n".data(using: .utf8)!)
         exit(3)
-    } catch { fail("kitchen dock-name: \(error)") }
+    } catch { fail("bottler dock-name: \(error)") }
 case "recipe-check":
-    guard args.count == 3 else { fail("usage: kitchen recipe-check <recipe.json>") }
+    guard args.count == 3 else { fail("usage: bottler recipe-check <recipe.json>") }
     let errors = checkRecipe(URL(fileURLWithPath: args[2]))
     if errors.isEmpty { print("recipe ok: \(args[2])") }
     else { fail("recipe-check \(args[2]):\n  " + errors.joined(separator: "\n  ")) }
 case "fetch":
-    guard args.count == 5 else { fail("usage: kitchen fetch <recipe-dir> <cache> <out>") }
+    guard args.count == 5 else { fail("usage: bottler fetch <recipe-dir> <cache> <out>") }
     do { try fetch(recipeDir: URL(fileURLWithPath: args[2]), cache: URL(fileURLWithPath: args[3]), out: URL(fileURLWithPath: args[4])) }
-    catch { fail("kitchen fetch: \(error)") }
+    catch { fail("bottler fetch: \(error)") }
 case "install":
-    guard args.count == 6 else { fail("usage: kitchen install <recipe-dir> <source> <game-dir> <icon-dir>") }
+    guard args.count == 6 else { fail("usage: bottler install <recipe-dir> <source> <game-dir> <icon-dir>") }
     do {
         let n = try install(recipeDir: URL(fileURLWithPath: args[2]), source: URL(fileURLWithPath: args[3]),
                             game: URL(fileURLWithPath: args[4]), iconDir: URL(fileURLWithPath: args[5]))
         print(n == 0 ? "already installed: nothing to change" : "installed: \(n) changes")
     } catch let e as InstallRefused {
-        FileHandle.standardError.write("kitchen install: refused: \(e.message)\n".data(using: .utf8)!)
+        FileHandle.standardError.write("bottler install: refused: \(e.message)\n".data(using: .utf8)!)
         exit(3)
-    } catch { fail("kitchen install: \(error)") }
+    } catch { fail("bottler install: \(error)") }
 case "ini-set":
-    guard args.count >= 5 else { fail("usage: kitchen ini-set <file> <section> key=value...") }
+    guard args.count >= 5 else { fail("usage: bottler ini-set <file> <section> key=value...") }
     var values: [String: String] = [:]
     for kv in args.dropFirst(4) {
-        guard let eq = kv.firstIndex(of: "=") else { fail("kitchen ini-set: not key=value: \(kv)") }
+        guard let eq = kv.firstIndex(of: "=") else { fail("bottler ini-set: not key=value: \(kv)") }
         values[String(kv[..<eq])] = String(kv[kv.index(after: eq)...])
     }
-    do { try iniSet(URL(fileURLWithPath: args[2]), section: args[3], values) } catch { fail("kitchen ini-set: \(error)") }
+    do { try iniSet(URL(fileURLWithPath: args[2]), section: args[3], values) } catch { fail("bottler ini-set: \(error)") }
 default:
-    fail("usage: kitchen scan | icon | exe-icon | displays | geometry | frame | menubar | recipe-check | fetch | install | ini-set (see the header of tools/kitchen.swift)")
+    fail("usage: bottler scan | icon | exe-icon | displays | geometry | frame | menubar | recipe-check | fetch | install | ini-set (see the header of tools/bottler.swift)")
 }

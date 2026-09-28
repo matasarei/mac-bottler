@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "title": "Alpha Centauri",
-  "bundleId": "com.matasarei.kitchen.alpha-centauri",
+  "bundleId": "com.matasarei.bottler.alpha-centauri",
   "engine": "crossover-23",
 
   "detect": {

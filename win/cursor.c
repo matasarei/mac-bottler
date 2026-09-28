@@ -2,7 +2,7 @@
  *
  * Old games read the mouse with GetCursorPos and treat the result as if their
  * window sat at the screen's top-left corner, as it does in real full-screen.
- * Once the window is centred (kitchen-place.exe), edge scrolling breaks on the
+ * Once the window is centred (bottler-place.exe), edge scrolling breaks on the
  * side away from the origin. When the game loads this DLL, it redirects four
  * user32 imports in the game exe and in every module loaded from the game's
  * folder, so the game sees coordinates relative to its own window:

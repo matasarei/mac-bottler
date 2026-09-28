@@ -1,4 +1,4 @@
-# wine-kitchen
+# mac-bottler
 
 Build a native-feeling macOS app for a Windows game, on your own Mac, from a small
 per-game **recipe**. Each app is self-contained: a pinned Wine runtime, its own
@@ -33,7 +33,7 @@ it runs on synthetic executables only, never on game files.
 | `recipes/<game>/` | `recipe.json` (how the game is detected, installed and launched) and `notes.md` (what was tried and why) |
 | `engines/` | pinned Wine runtimes (URL + SHA256) |
 | `core/` | generic build, install and launch scripts, and the launcher template |
-| `tools/` | `kitchen`, the Swift CLI: scan a game, make icons, display geometry, backdrop, observe a running game |
+| `tools/` | `bottler`, the Swift CLI: scan a game, make icons, display geometry, backdrop, observe a running game |
 | `win/` | small Windows helpers built with mingw (window placement, proxy DLLs) |
 | `docs/` | `INTERNALS.md` (mechanisms and traps), `RECIPES.md` (recipe schema), `THIRD-PARTY.md` |
 

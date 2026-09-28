@@ -6,7 +6,7 @@ A recipe is a folder `recipes/<game>/` with:
 - `notes.md`: what was tried on this game and why, including what failed;
 - any file the recipe names, e.g. a proxy DLL's `.def` (`win/proxy.sh def`).
 
-It is the only place anything game-specific lives. `kitchen recipe-check
+It is the only place anything game-specific lives. `bottler recipe-check
 recipes/<game>/recipe.json` validates it; unknown keys are errors, so a typo fails
 the build instead of the game.
 
@@ -15,7 +15,7 @@ the build instead of the game.
 - `make app RECIPE=recipes/<game>` (on the machine that builds the app) copies the
   recipe into the app as `Resources/recipe/`, fetches and verifies its
   `downloads`, and builds its `proxy` DLL. Results go to `Resources/recipe/files/`.
-- Install (the app's Install button, `kitchen install`) copies the player's own
+- Install (the app's Install button, `bottler install`) copies the player's own
   game folder into the app and applies `install`. It needs no network and no
   compiler, and running it again changes nothing.
 
@@ -25,7 +25,7 @@ the build instead of the game.
 {
   "schema": 1,
   "title": "Alpha Centauri",
-  "bundleId": "com.matasarei.kitchen.alpha-centauri",
+  "bundleId": "com.matasarei.bottler.alpha-centauri",
   "engine": "crossover-23",
 
   "detect": {
@@ -82,12 +82,12 @@ the build instead of the game.
 | `install.downloads` | pinned archives fetched at build time: `url`, `sha256`, and `files` mapping a path inside the archive to a path in the game folder. Zip only for now. |
 | `install.ini` | INI edits applied at install; the section is created and keys added when missing; CRLF files stay CRLF |
 | `install.proxy` | `dll` in the game folder is renamed `<name>_orig.dll` and replaced by a proxy built from `def` (a `.def` in the recipe folder, from `win/proxy.sh def`); the original's exports must match the `.def` |
-| `install.appIcon` | the exe whose icon becomes the app icon (`kitchen icon`) |
-| `install.exeIcon` | the exe that gets that icon written into it in place (`kitchen exe-icon`), so the Dock shows it; the stock exe is kept as `<exe>.bkp` |
+| `install.appIcon` | the exe whose icon becomes the app icon (`bottler icon`) |
+| `install.exeIcon` | the exe that gets that icon written into it in place (`bottler exe-icon`), so the Dock shows it; the stock exe is kept as `<exe>.bkp` |
 | `launch.variants` | what the player can start: `label`, `exe` (relative to the game folder), `args` |
-| `launch.window.mode` | `native` or `pillarbox:<w>:<h>` (see `kitchen geometry`) |
+| `launch.window.mode` | `native` or `pillarbox:<w>:<h>` (see `bottler geometry`) |
 | `launch.window.align` | round the window's sides down to a multiple of this |
-| `launch.window.backdrop` | black backdrop behind the window (`kitchen frame`) |
+| `launch.window.backdrop` | black backdrop behind the window (`bottler frame`) |
 | `launch.window.menubar` | `hide` (auto-hide while playing) or `keep` |
 | `launch.window.title` | text the game window's title contains, when the largest window is not the game's |
 | `launch.ini` | INI edits applied at every launch; `{w}`, `{h}`, `{x}`, `{y}` are the window's geometry |

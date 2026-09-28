@@ -1,4 +1,4 @@
-// The launcher window every kitchen-built app shares. It reads the recipe
+// The launcher window every bottler-built app shares. It reads the recipe
 // (Resources/recipe/recipe.json) and shows only what the player can choose:
 // install the game from a folder, then the game variant (if the recipe has
 // several), the display (if several are connected) and Play. Everything else is
@@ -73,7 +73,7 @@ func runScript(_ name: String, _ args: [String], output: @escaping (String) -> V
 
 final class Model: ObservableObject {
     @Published var installed = FileManager.default.fileExists(
-        atPath: resources.appendingPathComponent("game/.kitchen-install.json").path)
+        atPath: resources.appendingPathComponent("game/.bottler-install.json").path)
     @Published var busy = false
     @Published var status = ""
     @Published var error = ""
@@ -112,7 +112,7 @@ final class Model: ObservableObject {
                 self.applyIcon()
             } else {
                 self.status = ""
-                self.error = stderr.split(separator: "\n").last.map { String($0).replacingOccurrences(of: "kitchen install: refused: ", with: "") }
+                self.error = stderr.split(separator: "\n").last.map { String($0).replacingOccurrences(of: "bottler install: refused: ", with: "") }
                     ?? "The installation failed (code \(code))."
             }
         })

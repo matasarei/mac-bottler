@@ -5,9 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 RECIPE="$(cd "$1" && pwd)"; APP="${2:-}"; NO_ENGINE="${3:-}"
-KITCHEN=build/kitchen
+KITCHEN=build/bottler
 mkdir -p build build/deps
-swiftc -O -o "$KITCHEN" tools/kitchen.swift
+swiftc -O -o "$KITCHEN" tools/bottler.swift
 "$KITCHEN" recipe-check "$RECIPE/recipe.json"
 TITLE="$("$KITCHEN" recipe-field "$RECIPE/recipe.json" title)"
 BUNDLE_ID="$("$KITCHEN" recipe-field "$RECIPE/recipe.json" bundleId)"
@@ -58,8 +58,8 @@ if [ -n "$PROXY_DLL" ]; then
 fi
 
 echo "==> tools"
-cp "$KITCHEN" "$RES/bin/kitchen"
-i686-w64-mingw32-gcc -O2 -mwindows -o "$RES/bin/kitchen-place.exe" win/place.c
+cp "$KITCHEN" "$RES/bin/bottler"
+i686-w64-mingw32-gcc -O2 -mwindows -o "$RES/bin/bottler-place.exe" win/place.c
 cp core/install.sh core/launch.sh core/wine-env.sh "$RES/bin/"
 
 echo "==> launcher"

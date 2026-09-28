@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "title": "Kitchen Test",
-  "bundleId": "com.matasarei.kitchen.test",
+  "title": "Bottler Test",
+  "bundleId": "com.matasarei.bottler.test",
   "engine": "crossover-23",
   "detect": { "required": ["Game.exe"], "fingerprint": "Game.exe", "unknown": "warn" },
   "launch": {
