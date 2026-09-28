@@ -2,13 +2,14 @@
 """Write minimal synthetic Windows PE files for the tests. No game data involved.
 
 usage: mkpe.py <out-file> [--64] [--console] [--size N] [--imports a.dll,b.dll]
-               [--broken-imports] [--text STRING] [--icons 16,32,48] [--figure]
+               [--broken-imports] [--text STRING] [--icons 16,32,48] [--figure | --card]
 
 --broken-imports points the import directory outside every section, the way a
 packed or encrypted executable looks to a reader. --text embeds a plain string.
 --icons adds a .rsrc section with one icon group of 24-bit BMP icons (with AND
 masks) at the given sizes, stored contiguously the way old games store them.
---figure makes the icons a small disc on a transparent background (~80% transparent).
+--figure makes the icons a plus sign on a transparent background (~44% transparent once trimmed).
+--card makes them an opaque square over the middle 70%, with transparent margins.
 """
 import argparse
 import struct
@@ -16,7 +17,7 @@ import struct
 
 def bmp_icon(n, figure=False):
     """A 24-bit n x n icon: a diagonal colour gradient, transparent 2 px border;
-    with figure, only a centred disc of radius n/4 is opaque."""
+    with figure, only a centred plus sign is opaque; with card, a centred square."""
     row = (n * 3 + 3) & ~3
     pixels = bytearray()
     for y in range(n):
@@ -32,8 +33,14 @@ def bmp_icon(n, figure=False):
     for y in range(n):
         bits = bytearray(mask_row)
         for x in range(n):
-            if figure:
-                clear = (x + 0.5 - n / 2) ** 2 + (y + 0.5 - n / 2) ** 2 > (n / 4) ** 2
+            if figure == "card":
+                m = round(n * 0.15)
+                clear = x < m or y < m or x >= n - m or y >= n - m
+            elif figure:  # a plus sign over the middle 60%, arms a third of that thick
+                lo, hi = n * 0.2, n * 0.8
+                t0, t1 = n * 0.4, n * 0.6
+                cx, cy = x + 0.5, y + 0.5
+                clear = not ((lo <= cx < hi and t0 <= cy < t1) or (lo <= cy < hi and t0 <= cx < t1))
             else:
                 clear = x < 2 or y < 2 or x >= n - 2 or y >= n - 2
             if clear:
@@ -156,7 +163,8 @@ def main():
     p.add_argument("--broken-imports", action="store_true")
     p.add_argument("--text", default="")
     p.add_argument("--icons", default="")
-    p.add_argument("--figure", action="store_true")
+    p.add_argument("--figure", action="store_const", const="figure", default=False)
+    p.add_argument("--card", dest="figure", action="store_const", const="card")
     a = p.parse_args()
     imports = [x for x in a.imports.split(",") if x]
     with open(a.out, "wb") as f:

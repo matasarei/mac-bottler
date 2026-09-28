@@ -508,6 +508,31 @@ func roundedIcon(_ src: CGImage, canvas: Int) -> CGImage {
     return ctx.makeImage()!
 }
 
+/// The image cut to the square around what it draws (alpha >= 128), so transparent
+/// margins do not count: an icon already drawn as a rounded card for macOS then
+/// fills the body instead of going on a plate. Unchanged when there is no margin.
+func trimmedToSquare(_ img: CGImage) -> CGImage {
+    let w = img.width, h = img.height
+    let ctx = rgbaContext(w, h)
+    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let data = ctx.data else { return img }
+    let px = data.bindMemory(to: UInt8.self, capacity: ctx.bytesPerRow * h)
+    var minX = w, minY = h, maxX = -1, maxY = -1   // rows from the top
+    for row in 0..<h {
+        for x in 0..<w where px[row * ctx.bytesPerRow + x * 4 + 3] >= 128 {
+            minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, row); maxY = max(maxY, row)
+        }
+    }
+    guard maxX >= 0 else { return img }
+    let side = max(maxX - minX + 1, maxY - minY + 1)
+    guard side < max(w, h) else { return img }
+    let left = minX - (side - (maxX - minX + 1)) / 2, top = minY - (side - (maxY - minY + 1)) / 2
+    let out = rgbaContext(side, side)
+    out.interpolationQuality = .none
+    out.draw(img, in: CGRect(x: -left, y: side + top - h, width: w, height: h))
+    return out.makeImage() ?? img
+}
+
 /// The share of an image's pixels that are mostly transparent (alpha < 128).
 func transparentShare(_ img: CGImage) -> Double {
     let w = img.width, h = img.height
@@ -579,7 +604,7 @@ func writePNG(_ img: CGImage, _ url: URL) throws {
 
 /// AppIcon.icns + icon_1024.png for the app, exe-icon-{256,48,32,16}.png for exe-icon.
 func makeIcons(exe: URL, out: URL) throws {
-    let src = try largestIcon(try PEFile(data: Data(contentsOf: exe)))
+    let src = trimmedToSquare(try largestIcon(try PEFile(data: Data(contentsOf: exe))))
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
     let master = roundedIcon(src, canvas: 1024)
     try writePNG(master, out.appendingPathComponent("icon_1024.png"))

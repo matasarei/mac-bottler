@@ -93,8 +93,11 @@ found on; the lesson is written so it applies to other games too.
 - **ImageIO ignores the AND mask of 24-bit BMP icons** (it applies it to 4- and
   8-bit ones): the transparent parts decode opaque. `largestIcon` clears the masked
   pixels itself.
+- **Transparent margins are trimmed first**: the icon is cut to the square around
+  what it draws. An icon already drawn as a rounded card for macOS (this
+  Counter-Strike copy's `hl.exe`) then fills the body instead of going on a plate.
 - **A figure on a transparent background goes on a plate.** When at least 30% of
-  the icon is transparent (Nox's mask: 44%, SMAC's `terranx.exe`: 56%), filling the
+  the (trimmed) icon is transparent (Nox's mask: 44%, SMAC's `terranx.exe`: 56%), filling the
   squircle would cut the figure and leave holes, so it is drawn whole on a flat
   stone-coloured plate at a whole-pixel scale. Pictures (SMAC's `terran.exe`: 0%; a
   round icon is ~21%) still fill the body.

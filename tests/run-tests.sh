@@ -139,6 +139,11 @@ rgb() { python3 -c "import sys; from PIL import Image; print(*Image.open(sys.arg
 if [ "$(rgb "$I/fig/icon_1024.png" 160 512)" = "170 165 154 255" ]; then ok; else bad "figure: the plate fills the body, got $(rgb "$I/fig/icon_1024.png" 160 512)"; fi
 if [ "$(px "$I/fig/icon_1024.png" 0 0)" = "1024 0" ]; then ok; else bad "figure: the corner stays transparent"; fi
 if [ "$(px "$I/out/icon_1024.png" 150 512)" = "1024 255" ] && [ "$(px "$I/out/icon_1024.png" 60 512)" = "1024 0" ]; then ok; else bad "a picture still fills the body, no plate"; fi
+# an opaque card with transparent margins (an icon already drawn for macOS) fills the body
+pe "$I/card.exe" --imports KERNEL32.dll --icons 32 --card
+"$T/bottler" icon "$I/card.exe" "$I/card" >/dev/null
+EDGE="$(rgb "$I/card/icon_1024.png" 115 512)"
+if [ "${EDGE##* }" = "255" ] && [ "$EDGE" != "170 165 154 255" ]; then ok; else bad "a card with margins is trimmed and fills the body, no plate: edge is $EDGE"; fi
 mode() { python3 -c "import sys; from PIL import Image; print(Image.open(sys.argv[1]).mode)" "$1"; }
 if [ "$(mode "$I/fig/exe-icon-256.png")" = "P" ]; then ok; else bad "few-colour exe icon is a palette PNG"; fi
 # two icon slots with ~4 KB of room: the largest icon still goes in, the rest is left out
