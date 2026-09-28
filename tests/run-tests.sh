@@ -339,6 +339,7 @@ for n in one two; do
     B="$BOTTLER_PROJECTS/$n/Bottler Test.app"
     expect "$n: bundle id from the recipe" "com.matasarei.bottler.test" "$(defaults read "$B/Contents/Info" CFBundleIdentifier 2>/dev/null)"
     expect "$n: the icon made from the game is the bundle icon" "AppIcon" "$(defaults read "$B/Contents/Info" CFBundleIconFile 2>/dev/null)"
+    expect "$n: a background app until its window shows (no Dock tile when it goes straight to the game)" "1" "$(defaults read "$B/Contents/Info" LSUIElement 2>/dev/null)"
     if [ -s "$B/Contents/Resources/AppIcon.icns" ]; then ok; else bad "$n: AppIcon.icns in Resources"; fi
     if [ -f "$B/Contents/Resources/prefix/drive_c/Game/Game.exe" ] && [ -e "$B/Contents/Resources/game/Game.exe" ]; then ok; else bad "$n: game installed at build time"; fi
     if file "$B/Contents/MacOS/launcher" 2>/dev/null | grep -q "Mach-O 64-bit executable"; then ok; else bad "$n: launcher built"; fi
