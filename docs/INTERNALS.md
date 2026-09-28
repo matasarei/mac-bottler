@@ -1,0 +1,69 @@
+# Internals and traps
+
+How things work, and what was already tried. Each entry names the game it was
+found on; the lesson is written so it applies to other games too.
+
+## Display
+
+- **winemac.drv has no virtual desktop.** The Wine "Explorer\Desktops" setting is
+  ignored on macOS (checked in the Wine master source: the Mac driver's desktop
+  window is always the real screen; only winex11 has a `desktop.c`). A game's
+  window is a real macOS window, so "4:3 with black borders" needs our own
+  backdrop behind it (`kitchen frame`). *Alpha Centauri.*
+- **The macOS menu bar hides only for windows that cover the whole screen.** A
+  pillarboxed window never does, so the launcher turns on the global "automatically
+  hide the menu bar" preference for the session and restores it on quit (with a
+  marker file, so a crashed run is restored by the next one). *Alpha Centauri.*
+- **Games assume their window starts at the screen's top-left.** Once the window
+  is centred, `GetCursorPos` (screen coordinates) no longer matches what the game
+  expects; edge scrolling breaks on the side away from the origin. Fix: a proxy DLL
+  that makes GetCursorPos, SetCursorPos, ScreenToClient and ClientToScreen
+  window-relative, clamped to the window, so black borders act as edges.
+  *Alpha Centauri (via its own soundx.dll).*
+- **Moving another app's window from macOS needs Accessibility permission; from
+  inside Wine it does not.** A small Windows helper in the same Wine session can
+  `SetWindowPos` the game window freely. *Alpha Centauri.*
+- **Very wide native full-screen can break a 2D game's redraw.** Alpha Centauri
+  (with Thinker) at 3440x1440 left most of the map black after scrolling; the same
+  game at 1920x1440 drew correctly. Prefer a pillarboxed 4:3 surface over native
+  ultrawide for old 2D games.
+- **Retina:** keep Wine's `RetinaMode=n` for old games: they render at point size
+  and macOS scales 2x cleanly; native Retina makes 1999-era UI unreadably small.
+- **cnc-ddraw** (DirectDraw wrapper) under this Wine: only its GDI renderer drew
+  anything for Alpha Centauri (OpenGL grey, Direct3D 9 black), and its default
+  cursor lock needs `devmode=true`. Scaled output lost menu text until
+  `minfps` forced redraws. GOG ships cnc-ddraw with some games (Nox): a local
+  `ddraw.dll` is loaded even when the game does not use DirectDraw, and its hooks
+  cost CPU, so set it aside when the game runs in GDI mode.
+
+## Executables and icons
+
+- **The Dock icon of a running Wine game comes from the running .exe's icon
+  resource**, not from the app bundle. An `exeIcon.icns` next to the loader or
+  under `$CX_ROOT/Resources` had no effect.
+- **Never rebuild a game's PE file to change its icon.** rcedit's full resource
+  rebuild made Alpha Centauri's `terranx.exe` crash (it has self-modifying code
+  sections). The safe method: overwrite the existing RT_ICON data block in place
+  with PNG icons (256/48/32/16), re-point the RT_ICON entries and rewrite the group
+  icon in its own slot, and refuse unless every changed byte stays inside `.rsrc`
+  and the file size is unchanged.
+- **The Dock name** is the loader's file name as exec'd. On the CrossOver 23 engine
+  we renamed the loader and patched the one path string in `ntdll.so`; on the
+  WoWSilicon Wine 11 runtime that string cannot be patched, and wow-launcher's
+  `ROSETTA_X87_PATH` shim + symlink is the working method.
+- **Old executables often carry copy-protection leftovers** (SafeDisc:
+  `secdrv.sys`, `drvmgt.dll`) even in digital releases; they are not needed and
+  are excluded at install.
+
+## Audio
+
+- **44.1 kHz output devices can crackle** with old DirectSound games under Wine;
+  the MacBook speakers at 48 kHz were clean. Doubling DirectSound's `HelBuflen`
+  and turning off the game's 3D sound/EAX did not help on their own.
+
+## CPU
+
+- **Many old games spin their main loop at 100%.** Alpha Centauri used ~170% CPU
+  idle; Thinker's built-in idle fix brought it to ~10%. The standalone
+  smac-cpu-fix (a PeekMessageA wait hook) had no effect under Wine, and
+  cnc-ddraw's `maxgameticks`/`limiter_type` did not either.
