@@ -182,12 +182,14 @@ struct LauncherView: View {
     }
 }
 
+/// NSApplication does not retain its delegate: this global keeps it alive.
+let appDelegate = AppDelegate()
+
 @main
 enum LauncherMain {
     static func main() {
         let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
+        app.delegate = appDelegate
         app.run()
     }
 }
