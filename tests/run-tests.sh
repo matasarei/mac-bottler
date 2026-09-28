@@ -375,6 +375,30 @@ expect "second run changes nothing" "" "$("$T/bottler" dock-name "$E" "Alpha Cen
 "$T/bottler" dock-name "$E" "A name longer than sixteen" >/dev/null 2>&1; rc=$?
 expect "a name over 16 bytes is refused" "3" "$rc"
 
+# --- hints: a fake Lutris API in local files
+H="$PWD/$T/lutris"; mkdir -p "$H/installers"
+cat > "$H/games" <<'JSON'
+{"results": [{"name": "Anachronox", "slug": "anachronox", "year": 2001},
+             {"name": "Nox", "slug": "nox", "year": 2000},
+             {"name": "Nox Archaist", "slug": "nox-archaist", "year": null}]}
+JSON
+cat > "$H/installers/nox" <<'JSON'
+{"results": [{"version": "GOG", "runner": "wine",
+  "script": {"game": {"exe": "drive_c/GOG Games/Nox/NOX.EXE", "args": "-window"},
+             "wine": {"overrides": {"ddraw.dll": "n"}},
+             "installer": [{"task": {"name": "winetricks", "app": "d3dx9"}}, {"move": {}}]}}]}
+JSON
+echo '{"results": []}' > "$H/installers/nox-archaist"
+OUT=$(BOTTLER_LUTRIS_API="file://$H" "$T/bottler" hints nox)
+expect "hints: the exact name comes first" "Nox (2000, lutris.net/games/nox)" "$(echo "$OUT" | head -1)"
+if echo "$OUT" | grep -q 'exe: drive_c/GOG Games/Nox/NOX.EXE' && echo "$OUT" | grep -q 'args: -window'; then ok; else bad "hints show exe and args"; fi
+if echo "$OUT" | grep -q '"ddraw.dll":"n"' && echo "$OUT" | grep -q 'installer: winetricks d3dx9, move'; then ok; else bad "hints show overrides and winetricks"; fi
+expect "hints: order is exact, whole words, then substrings" "Nox|Nox Archaist|Anachronox" \
+    "$(echo "$OUT" | grep -E '^[A-Z]' | sed 's/ (.*//' | paste -sd'|' -)"
+expect "hints: a null year prints as ?" "Nox Archaist (?, lutris.net/games/nox-archaist)" "$(echo "$OUT" | grep '^Nox Archaist')"
+OUT=$(BOTTLER_LUTRIS_API="file://$H/missing" "$T/bottler" hints nox); rc=$?
+if [ $rc -eq 0 ] && echo "$OUT" | grep -q "^warning: Lutris is not reachable"; then ok; else bad "hints: unreachable API is a warning, exit 0"; fi
+
 # --- observing an app: cpu, windows, log, shot (fake app with a busy process)
 F="$PWD/$T/Fake.app"; mkdir -p "$F/Contents/MacOS" "$F/Contents/Resources/logs"
 # a copied system binary is killed by code signing; build a busy loop instead

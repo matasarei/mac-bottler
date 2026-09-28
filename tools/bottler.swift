@@ -2,6 +2,7 @@
 // Resources/bin/bottler and used by the build, the installer and agents.
 //
 //   bottler scan <dir>                       JSON report on a game folder's executables
+//   bottler hints <game name>                what Lutris' installer scripts know (hints only)
 //   bottler icon <exe> <out-dir>             rounded macOS icon from the exe's own icon
 //   bottler exe-icon <exe> <png-dir> <out>   put that icon into a copy of the exe, in place
 //   bottler displays                         JSON list of the connected displays
@@ -1295,6 +1296,81 @@ func dockName(wine: URL, name: String) throws {
 }
 
 
+
+// MARK: - hints (Lutris)
+
+/// Lutris' public API: games by name, then each game's community installer scripts.
+/// Printed as hints for a recipe, never applied. BOTTLER_LUTRIS_API replaces the
+/// API root (tests point it at local files).
+func lutrisHints(_ name: String) -> String {
+    let api = ProcessInfo.processInfo.environment["BOTTLER_LUTRIS_API"] ?? "https://lutris.net/api"
+    func get(_ path: String) -> Any? {
+        guard let url = URL(string: api + path) else { return nil }
+        if url.isFileURL { return (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) } }
+        var req = URLRequest(url: url, timeoutInterval: 15)
+        req.setValue("mac-bottler", forHTTPHeaderField: "User-Agent")
+        let done = DispatchSemaphore(value: 0)
+        var body: Data?
+        URLSession.shared.dataTask(with: req) { data, response, _ in
+            if (response as? HTTPURLResponse)?.statusCode == 200 { body = data }
+            done.signal()
+        }.resume()
+        done.wait()
+        return body.flatMap { try? JSONSerialization.jsonObject(with: $0) }
+    }
+    let query = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? name
+    guard let found = get("/games?search=\(query)") as? [String: Any], let games = found["results"] as? [[String: Any]] else {
+        return "warning: Lutris is not reachable; no hints (nothing else depends on them)\n"
+    }
+    // exact name, then all query words as whole words, then substrings; among
+    // equals, fewer extra words first
+    func words(_ s: String) -> [String] {
+        s.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+    }
+    let wanted = words(name)
+    func score(_ g: [String: Any]) -> (Int, Int) {
+        let n = g["name"] as? String ?? "", w = words(n)
+        if w == wanted { return (3, 0) }
+        if wanted.allSatisfy(w.contains) { return (2, -(w.count - wanted.count)) }
+        if wanted.allSatisfy({ q in n.lowercased().contains(q) }) { return (1, -(w.count - wanted.count)) }
+        return (0, 0)
+    }
+    let matches = games.filter { score($0).0 > 0 }.sorted { score($0) > score($1) }.prefix(5)
+    guard !matches.isEmpty else { return "no Lutris game matches \"\(name)\"\n" }
+    var out = ""
+    for g in matches {
+        let slug = g["slug"] as? String ?? ""
+        let year = (g["year"] as? Int).map(String.init) ?? "?"
+        out += "\(g["name"] as? String ?? slug) (\(year), lutris.net/games/\(slug))\n"
+        guard let inst = get("/installers/\(slug)") as? [String: Any], let list = inst["results"] as? [[String: Any]], !list.isEmpty else {
+            out += "  no installer scripts\n"; continue
+        }
+        for i in list {
+            let script = i["script"] as? [String: Any] ?? [:]
+            let game = script["game"] as? [String: Any] ?? [:]
+            out += "  - \(i["version"] as? String ?? "?") (runner: \(i["runner"] as? String ?? "?"))\n"
+            if let exe = game["exe"] { out += "      exe: \(exe)\n" }
+            if let args = game["args"] { out += "      args: \(args)\n" }
+            for key in ["wine", "system"] {
+                if let v = script[key], !(v is NSNull),
+                   let d = try? JSONSerialization.data(withJSONObject: v, options: [.sortedKeys]) {
+                    out += "      \(key): \(String(decoding: d, as: UTF8.self))\n"
+                }
+            }
+            let tasks = (script["installer"] as? [Any] ?? []).compactMap { t -> String? in
+                guard let d = t as? [String: Any], let k = d.keys.first else { return nil }
+                if k == "task", let task = d[k] as? [String: Any] {
+                    let what = task["name"] as? String ?? "task"
+                    return what == "winetricks" ? "winetricks \(task["app"] as? String ?? "")" : what
+                }
+                return k
+            }
+            if !tasks.isEmpty { out += "      installer: \(tasks.joined(separator: ", "))\n" }
+        }
+    }
+    return out
+}
+
 // MARK: - observing a running app (agents)
 
 /// The app bundle's resolved path with a trailing slash; every process of the app
@@ -1476,6 +1552,9 @@ case "dock-name":
         FileHandle.standardError.write("bottler dock-name: refused: \(e.message)\n".data(using: .utf8)!)
         exit(3)
     } catch { fail("bottler dock-name: \(error)") }
+case "hints":
+    guard args.count >= 3 else { fail("usage: bottler hints <game name>") }
+    print(lutrisHints(args.dropFirst(2).joined(separator: " ")), terminator: "")
 case "windows":
     guard args.count == 3 else { fail("usage: bottler windows <app>") }
     do { printJSON(appWindows(try appRoot(args[2])).map { $0.json }) } catch { fail("bottler windows: \(error)") }
