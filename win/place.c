@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "cmdline.h"
 
 struct search { const char *title; HWND best; long long area; };
 
@@ -64,14 +65,10 @@ int main(int argc, char **argv)
     }
     int x = atoi(argv[1]), y = atoi(argv[2]), w = atoi(argv[3]), h = atoi(argv[4]);
 
-    /* the game's command line: exe and args, each quoted */
+    /* the game's command line: exe and args, quoted only where needed */
     char cmd[4096] = "";
-    for (i = sep + 1; i < argc; i++) {
-        if (strlen(cmd) + strlen(argv[i]) + 4 >= sizeof(cmd)) return 2;
-        strcat(cmd, i > sep + 1 ? " \"" : "\"");
-        strcat(cmd, argv[i]);
-        strcat(cmd, "\"");
-    }
+    for (i = sep + 1; i < argc; i++)
+        if (append_arg(cmd, sizeof(cmd), argv[i])) return 2;
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
     if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {

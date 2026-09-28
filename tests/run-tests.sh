@@ -197,6 +197,13 @@ pe "$X/x64.dll" --64 --imports KERNEL32.dll
 win/proxy.sh def "$X/x64.dll" >/dev/null 2>&1; rc=$?
 expect "64-bit DLLs are refused" "1" "$rc"
 if i686-w64-mingw32-gcc -O2 -mwindows -o "$X/bottler-place.exe" win/place.c 2>/dev/null; then ok; else bad "place.c builds"; fi
+# the game's command line: quoted only where needed (old games parse it themselves)
+cc -o "$X/cmdline-test" tests/fixtures/cmdline-test.c
+expect "plain args are not quoted" 'C:\Game\hl.exe -game cstrike -windowed' "$("$X/cmdline-test" 'C:\Game\hl.exe' -game cstrike -windowed)"
+expect "args with spaces, quotes and empty ones are quoted and escaped" \
+    '"C:\My Game\a.exe" "two words" "" "say \"hi\"" "trail dir\\"' \
+    "$("$X/cmdline-test" 'C:\My Game\a.exe' 'two words' '' 'say "hi"' 'trail dir\')"
+if grep -q 'append_arg' win/place.c; then ok; else bad "place.c builds the command line with append_arg"; fi
 
 # --- recipes: check, fetch, install on a fake game built here
 R="$T/recipe"; SRC="$R/source"; mkdir -p "$SRC/saves" "$R/recipe" "$R/zip/mod/sub"
