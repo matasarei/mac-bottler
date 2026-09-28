@@ -316,6 +316,7 @@ exec "$PWD/$T/bottler" "\$@"
 STUB
 cat > "$L/wine/bin/wine64" <<STUB
 #!/bin/bash
+echo "\$*" >> "$L/wine.calls"
 { echo "ARGS: \$*"; echo "CWD: \$PWD"; env | grep -E '^(WINEPREFIX|HOME|WINEDLLOVERRIDES|WINEMSYNC|GAME_MODE|DYLD_FALLBACK_LIBRARY_PATH)='; } > "$L/wine.log"
 exit "\${STUB_RC:-0}"
 STUB
@@ -354,6 +355,26 @@ expect "menu bar restored even when the game fails" "menubar restore $L/logs/men
 expect "variant without args" "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\thinker.exe" "$(grep '^ARGS:' "$L/wine.log")"
 rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
 if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
+# fullscreen: the game owns its window (no rect for bottler-place, which then never
+# moves it: moving an OpenGL window turned it black); registry values set per launch
+python3 - "$L/recipe/recipe.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["launch"]["window"] = {"mode": "fullscreen", "menubar": "hide"}
+d["launch"]["registry"] = [{"key": "HKCU\\Software\\Game\\Settings",
+                            "set": {"ScreenWidth": "dword:{w}", "ScreenHeight": "dword:{h}", "Windowed": "dword:0", "Name": "full {w}"}}]
+json.dump(d, open(sys.argv[1], "w"))
+PY
+if "$T/bottler" recipe-check "$L/recipe/recipe.json" >/dev/null; then ok; else bad "fullscreen mode and launch.registry pass recipe-check"; fi
+rm -f "$L/wine.calls"; bash "$L/bin/launch.sh" "$L" 1 main; rc=$?
+expect "fullscreen: bottler-place gets no rect, the args get the display below the notch" \
+    "ARGS: $L/bin/bottler-place.exe 0 0 0 0 -- C:\\Game\\bin\\thinker.exe -smac two words -w 1728 -h 1085" \
+    "$(grep '^ARGS:' "$L/wine.log")"
+expect "registry values are imported before the game starts, in one regedit call" \
+    "regedit /S C:\\bottler-launch.reg" "$(head -1 "$L/wine.calls")"
+expect "the .reg file holds the values with the geometry" \
+    "$(printf 'REGEDIT4\r\n\r\n[HKEY_CURRENT_USER\\Software\\Game\\Settings]\r\n"Name"="full 1728"\r\n"ScreenHeight"=dword:0000043d\r\n"ScreenWidth"=dword:000006c0\r\n"Windowed"=dword:00000000\r\n')" \
+    "$(cat "$L/prefix/drive_c/bottler-launch.reg" 2>/dev/null)"
 unset BOTTLER_TEST_SCREENS
 
 # --- projects: make project, and two projects built at the same time (no engine)

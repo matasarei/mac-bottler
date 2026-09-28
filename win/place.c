@@ -10,7 +10,9 @@
  * launcher (a different process) is found the same way. A window of another
  * size is centred on the rect. Re-applied every 250 ms, because some games move
  * their window back (Thinker does after a movie). Exits when the window is gone
- * after having been seen, or if none appears within 3 minutes.
+ * after having been seen, or if none appears within 3 minutes. A rect of size 0
+ * (a full-screen game, which owns its window) starts the game and never moves it:
+ * moving an OpenGL game's window turned its picture black.
  *
  * Build: i686-w64-mingw32-gcc -O2 -mwindows -o bottler-place.exe place.c
  */
@@ -84,7 +86,7 @@ int main(int argc, char **argv)
         EnumWindows(consider, (LPARAM)&s);
         if (s.best) {
             seen = TRUE;
-            place(s.best, x, y, w, h);
+            if (w > 0 && h > 0) place(s.best, x, y, w, h);
         } else if (seen || waited > 180000) {
             break;
         }
