@@ -14,7 +14,8 @@
 //   bottler prepare-launch <Resources> <variant> <display|main>
 //                                            geometry + per-launch INI edits; prints
 //                                            shell variables for core/launch.sh
-//   bottler menubar hide|restore <marker>    auto-hide the menu bar while playing
+//   bottler menubar hide                     auto-hide the menu bar while playing
+//   bottler desktop save|restore <file>      the menu bar and Dock settings, recorded and put back
 //   bottler recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
 //   bottler recipe-field <recipe.json> <field>   one value for the build: title,
 //                                            bundleId, engine, proxy.dll, install.registry (one per line)
@@ -955,34 +956,82 @@ final class FrameKeeper: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - menu bar
+// MARK: - menu bar and Dock
 
-/// The global "automatically hide the menu bar" preference, set for the session.
-/// hide: turns it on unless the user already has it on, leaving a marker file;
-/// restore: turns it off again only if the marker exists, then deletes it. A marker
-/// left by a crashed run is restored by the next run's restore.
-func menubar(_ action: String, marker: String) throws {
-    let key = "_HIHideMenuBar" as CFString
-    let current = CFPreferencesCopyValue(key, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser,
-                                         kCFPreferencesAnyHost) as? Bool ?? false
-    let fm = FileManager.default
-    switch action {
-    case "hide":
-        guard !current else { return }
-        fm.createFile(atPath: marker, contents: Data())
-        CFPreferencesSetValue(key, kCFBooleanTrue, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
-    case "restore":
-        guard fm.fileExists(atPath: marker) else { return }
-        CFPreferencesSetValue(key, nil, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
-        try fm.removeItem(atPath: marker)
-    default:
-        throw PEError(message: "menubar hide|restore <marker>")
+/// The preference domains the desktop settings live in. BOTTLER_TEST_PREFS=<id>
+/// swaps them for <id>.global and <id>.dock, so tests never touch the player's own.
+func prefDomains() -> (global: CFString, dock: CFString, test: Bool) {
+    if let t = ProcessInfo.processInfo.environment["BOTTLER_TEST_PREFS"], !t.isEmpty {
+        return ("\(t).global" as CFString, "\(t).dock" as CFString, true)
     }
-    CFPreferencesSynchronize(kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    return (kCFPreferencesAnyApplication, "com.apple.dock" as CFString, false)
+}
+
+private let menubarKey = "_HIHideMenuBar" as CFString, dockKey = "autohide" as CFString
+
+func readPref(_ key: CFString, _ domain: CFString) -> Bool? {
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    return CFPreferencesCopyValue(key, domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? Bool
+}
+
+func writePref(_ key: CFString, _ value: Bool?, _ domain: CFString) {
+    CFPreferencesSetValue(key, value.map { $0 ? kCFBooleanTrue : kCFBooleanFalse }, domain,
+                          kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+}
+
+/// Tell the running system the menu bar setting changed, and let the screens settle.
+func announceMenubar() {
     DistributedNotificationCenter.default().postNotificationName(
         NSNotification.Name("AppleInterfaceMenuBarHidingChangedNotification"), object: nil, userInfo: nil,
         deliverImmediately: true)
-    Thread.sleep(forTimeInterval: 0.5)   // let the screens' usable area settle
+    Thread.sleep(forTimeInterval: 0.5)
+}
+
+/// menubar hide: turn on "automatically hide the menu bar" for the game's session.
+/// What to go back to is `desktop`'s job.
+func menubar(_ action: String) throws {
+    guard action == "hide" else { throw PEError(message: "menubar hide") }
+    let d = prefDomains()
+    writePref(menubarKey, true, d.global)
+    if !d.test { announceMenubar() }
+}
+
+/// desktop save <file>: record how the menu bar and Dock are set (auto-hide or not)
+/// before a game runs. A snapshot that is already there was left by a run that never
+/// restored (a crash, a killed launch, a rebuilt app): it holds the player's real
+/// settings, so it is kept, not overwritten.
+/// desktop restore <file>: put both back as recorded, then delete the snapshot. The
+/// Dock is restarted only when its setting actually changes.
+func desktop(_ action: String, file: URL) throws {
+    let d = prefDomains(), fm = FileManager.default
+    switch action {
+    case "save":
+        guard !fm.fileExists(atPath: file.path) else { return }
+        var snap: [String: Any] = [:]
+        if let m = readPref(menubarKey, d.global) { snap["menubarAutohide"] = m }
+        if let a = readPref(dockKey, d.dock) { snap["dockAutohide"] = a }
+        try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: snap).write(to: file, options: .atomic)
+    case "restore":
+        guard fm.fileExists(atPath: file.path) else { return }
+        let snap = (try JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any] ?? [:]
+        let menubarWas = snap["menubarAutohide"] as? Bool, dockWas = snap["dockAutohide"] as? Bool
+        if readPref(menubarKey, d.global) != menubarWas {
+            writePref(menubarKey, menubarWas, d.global)
+            if !d.test { announceMenubar() }
+        }
+        if readPref(dockKey, d.dock) != dockWas {
+            writePref(dockKey, dockWas, d.dock)
+            if !d.test {   // the Dock reads its settings when it starts
+                let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/killall"); p.arguments = ["Dock"]
+                try? p.run(); p.waitUntilExit()
+            }
+        }
+        try fm.removeItem(at: file)
+    default:
+        throw PEError(message: "desktop save|restore <file>")
+    }
 }
 
 
@@ -1784,8 +1833,11 @@ case "frame":
         app.run()
     } catch { fail("bottler frame: \(error)") }
 case "menubar":
-    guard args.count == 4 else { fail("usage: bottler menubar hide|restore <marker>") }
-    do { try menubar(args[2], marker: args[3]) } catch { fail("bottler menubar: \(error)") }
+    guard args.count == 3 else { fail("usage: bottler menubar hide") }
+    do { try menubar(args[2]) } catch { fail("bottler menubar: \(error)") }
+case "desktop":
+    guard args.count == 4 else { fail("usage: bottler desktop save|restore <file>") }
+    do { try desktop(args[2], file: URL(fileURLWithPath: args[3])) } catch { fail("bottler desktop: \(error)") }
 case "prepare-launch":
     guard args.count == 5, let variant = Int(args[3]) else { fail("usage: bottler prepare-launch <Resources> <variant> <display|main>") }
     do { print(try prepareLaunch(res: URL(fileURLWithPath: args[2]), variant: variant, display: args[4])) }

@@ -346,13 +346,29 @@ if [ -s "$A/icon/AppIcon.icns" ]; then ok; else bad "install.sh icons go to Reso
 bash core/install.sh "$A" "$T/does-not-exist" >/dev/null 2>&1; rc=$?
 expect "install.sh: missing source exits 2" "2" "$rc"
 
+# --- desktop save/restore: the menu bar and Dock settings as the player had them
+# (test preference domains: the player's real settings are never touched)
+export BOTTLER_TEST_PREFS="local.bottler.test.$$"
+TG="$BOTTLER_TEST_PREFS.global"; TD="$BOTTLER_TEST_PREFS.dock"
+defaults write "$TD" autohide -bool false; defaults delete "$TG" _HIHideMenuBar 2>/dev/null
+SNAP="$T/desktop.json"; rm -f "$SNAP"
+"$T/bottler" desktop save "$SNAP"
+defaults write "$TD" autohide -bool true; "$T/bottler" menubar hide   # what a game run may leave behind
+expect "menubar hide sets the preference" "1" "$(defaults read "$TG" _HIHideMenuBar 2>/dev/null)"
+"$T/bottler" desktop save "$SNAP"   # a stranded snapshot is the original: never overwritten
+"$T/bottler" desktop restore "$SNAP"
+expect "restore brings the Dock back as it was" "0" "$(defaults read "$TD" autohide 2>/dev/null)"
+expect "restore brings the menu bar back as it was (unset)" "unset" "$(defaults read "$TG" _HIHideMenuBar 2>/dev/null || echo unset)"
+if [ ! -e "$SNAP" ]; then ok; else bad "restore removes the snapshot"; fi
+defaults delete "$TG" 2>/dev/null; defaults delete "$TD" 2>/dev/null; unset BOTTLER_TEST_PREFS
+
 # --- core/launch.sh with a stub wine and a recording bottler
 L="$PWD/$T/launch/Contents/Resources"; mkdir -p "$L/bin" "$L/wine/bin" "$L/prefix/drive_c/Game" "$L/recipe"
 ln -s prefix/drive_c/Game "$L/game"
 cp core/launch.sh core/wine-env.sh "$L/bin/"
 cat > "$L/bin/bottler" <<STUB
 #!/bin/bash
-case "\$1" in frame|menubar) echo "\$*" >> "$L/calls"; exit 0 ;; esac
+case "\$1" in frame|menubar|desktop) echo "\$*" >> "$L/calls"; exit 0 ;; esac
 exec "$PWD/$T/bottler" "\$@"
 STUB
 cat > "$L/wine/bin/wine64" <<STUB
@@ -376,6 +392,9 @@ cat > "$L/recipe/recipe.json" <<'JSON'
     "dllOverrides": { "ddraw": "n,b", "dinput": "b" } } }
 JSON
 export BOTTLER_TEST_SCREENS="0,0,1728,1117;0,0,1728,1084;32;0,0,1728,1117"
+# the menu bar marker lives outside the app: a rebuilt or deleted app must not strand
+# the menu bar hidden (it did, when a killed test run's app was rebuilt)
+STATE="$PWD/$T/state"; export BOTTLER_STATE="$STATE"
 rm -f "$L/calls"; bash "$L/bin/launch.sh" "$L" 1 main; rc=$?
 expect "launch exits with the game's code" "0" "$rc"
 expect "wine runs bottler-place with the rect and the variant's args" \
@@ -387,12 +406,12 @@ expect "WINEPREFIX is the bundle's" "WINEPREFIX=$L/prefix" "$(grep '^WINEPREFIX=
 expect "HOME is inside the bundle" "HOME=$L/home" "$(grep '^HOME=' "$L/wine.log")"
 expect "DLL overrides from the recipe" "WINEDLLOVERRIDES=ddraw=n,b;dinput=b" "$(grep '^WINEDLLOVERRIDES=' "$L/wine.log")"
 expect "recipe env exported, quotes intact" "GAME_MODE=it's quoted" "$(grep '^GAME_MODE=' "$L/wine.log")"
-expect "menu bar: restored, hidden, frame started, restored at exit" \
-    "$(printf 'menubar restore %s\nmenubar hide %s\nframe main --wine %s\nmenubar restore %s' "$L/logs/menubar-restore" "$L/logs/menubar-restore" "$L" "$L/logs/menubar-restore")" \
+expect "desktop: snapshot taken, menu bar hidden, frame started, snapshot restored at exit" \
+    "$(printf 'desktop save %s\nmenubar hide\nframe main --wine %s\ndesktop restore %s' "$STATE/desktop.json" "$L" "$STATE/desktop.json")" \
     "$(cat "$L/calls")"
 rm -f "$L/calls"; STUB_RC=5 bash "$L/bin/launch.sh" "$L" 0 main; rc=$?
 expect "a failing game's exit code is passed on" "5" "$rc"
-expect "menu bar restored even when the game fails" "menubar restore $L/logs/menubar-restore" "$(tail -1 "$L/calls")"
+expect "desktop restored even when the game fails" "desktop restore $STATE/desktop.json" "$(tail -1 "$L/calls")"
 expect "variant without args" "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\thinker.exe" "$(grep '^ARGS:' "$L/wine.log")"
 rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
 if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
