@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "title": "Nox",
+  "bundleId": "com.matasarei.bottler.nox",
+  "engine": "crossover-23",
+
+  "detect": {
+    "required": ["Game.exe", "ddraw.dll", "ddraw.ini"],
+    "fingerprint": "Game.exe",
+    "builds": {},
+    "unknown": "warn"
+  },
+
+  "install": {
+    "exclude": ["goggame.dll", "unins000.exe", "unins000.dat", "unins000.ini", "cnc-ddraw config.exe"],
+    "ini": [
+      {
+        "file": "ddraw.ini",
+        "section": "ddraw",
+        "set": { "fullscreen": "true", "windowed": "true", "border": "false", "maintas": "true",
+                 "savesettings": "0", "maxfps": "60", "maxfps": "60", "resizable": "false", "posX": "-32000", "posY": "-32000" }
+      }
+    ],
+    "appIcon": "Game.exe",
+    "exeIcon": "Game.exe"
+  },
+
+  "launch": {
+    "variants": [
+      { "label": "Nox", "exe": "Game.exe", "args": [] }
+    ],
+    "window": { "mode": "native", "backdrop": false, "menubar": "hide" },
+    "dllOverrides": { "ddraw": "n,b" }
+  }
+}
