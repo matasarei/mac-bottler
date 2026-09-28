@@ -4,6 +4,7 @@
 #   make check                   verify the build prerequisites
 #   make engine APP=<app> [ENGINE=<name>]   install a pinned Wine engine (engines/)
 #   make prefix APP=<app>        create the app's Wine prefix
+#   make test                    hermetic tests (synthetic PE files, no game data, no wine)
 #
 # Targets arrive with the plan's steps (engine, prefix, helpers, app, test,
 # compile, lint); until then they are not listed here.
@@ -13,7 +14,7 @@ ENGINE ?= crossover-23
 RES     = $(APP)/Contents/Resources
 DEPS    = build/deps
 
-.PHONY: help check engine prefix
+.PHONY: help check engine prefix test
 
 help:
 	@sed -n '1,/^$$/p' Makefile | sed 's/^# \{0,1\}//'
@@ -29,3 +30,6 @@ engine:
 
 prefix: engine
 	@core/prefix.sh "$(RES)"
+
+test:
+	@bash tests/run-tests.sh
