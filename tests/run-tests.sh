@@ -315,7 +315,7 @@ cat > "$L/recipe/recipe.json" <<'JSON'
   "detect": { "required": ["Game.exe"], "fingerprint": "Game.exe" },
   "launch": {
     "variants": [ { "label": "Plain", "exe": "thinker.exe", "args": [] },
-                  { "label": "With args", "exe": "bin/thinker.exe", "args": ["-smac", "two words"] } ],
+                  { "label": "With args", "exe": "bin/thinker.exe", "args": ["-smac", "two words", "-w", "{w}", "-h", "{h}"] } ],
     "window": { "mode": "pillarbox:4:3", "align": 8, "backdrop": true, "menubar": "hide" },
     "ini": [ { "file": "thinker.ini", "section": "thinker", "set": { "window_width": "{w}", "window_height": "{h}" } } ],
     "env": { "GAME_MODE": "it's quoted" },
@@ -325,7 +325,7 @@ export BOTTLER_TEST_SCREENS="0,0,1728,1117;0,0,1728,1084;32;0,0,1728,1117"
 rm -f "$L/calls"; bash "$L/bin/launch.sh" "$L" 1 main; rc=$?
 expect "launch exits with the game's code" "0" "$rc"
 expect "wine runs bottler-place with the rect and the variant's args" \
-    "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\bin\\thinker.exe -smac two words" \
+    "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\bin\\thinker.exe -smac two words -w 1440 -h 1080" \
     "$(grep '^ARGS:' "$L/wine.log")"
 expect "wine runs in the game's physical folder (C:\\Game, not a Z: path)" "CWD: $L/prefix/drive_c/Game" "$(grep '^CWD:' "$L/wine.log")"
 expect "per-launch INI values written" "$(printf '[thinker]\r\nwindow_width=1440\r\nwindow_height=1080\r\n')" "$(cat "$L/game/thinker.ini")"
@@ -375,6 +375,23 @@ done
 echo "played" > "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/game/saves/slot.sav"
 if core/build-app.sh "$BOTTLER_PROJECTS/one" --no-engine > "$T/rebuild.log" 2>&1; then ok; else bad "rebuild exits 0"; fi
 expect "a rebuild keeps the app's saves" "played" "$(cat "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/game/saves/slot.sav" 2>/dev/null)"
+
+# a local recipe: a folder given instead of a name is copied into the project (never committed)
+LOCAL="$T/my-recipe"; cp -R tests/fixtures/recipe-min "$LOCAL"
+python3 - "$LOCAL/recipe.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["title"] = "Local Test"; d["install"]["registry"] = ["settings.reg"]
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+GL="$T/game-local"; mkdir -p "$GL"; cp "$GA/Game.exe" "$GL/"; printf 'Windows Registry Editor Version 5.00\r\n' > "$GL/settings.reg"
+if core/project.sh mine "$LOCAL" "$GL" >/dev/null; then ok; else bad "make project takes a recipe folder"; fi
+expect "a local recipe is recorded as local" "local" "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['recipe'])" "$BOTTLER_PROJECTS/mine/project.json" 2>/dev/null)"
+if [ -f "$BOTTLER_PROJECTS/mine/recipe/recipe.json" ]; then ok; else bad "the local recipe is copied into the project"; fi
+if core/build-app.sh "$BOTTLER_PROJECTS/mine" --no-engine > "$T/build-local.log" 2>&1 && [ -d "$BOTTLER_PROJECTS/mine/Local Test.app" ]; then ok; else bad "a project builds from its local recipe"; fi
+expect "recipe-field lists the registry files" "settings.reg" "$("$T/bottler" recipe-field "$BOTTLER_PROJECTS/mine/recipe/recipe.json" install.registry 2>&1)"
+rm "$GL/settings.reg"; mkdir -p "$T/gl-icons"
+"$T/bottler" install "$BOTTLER_PROJECTS/mine/recipe" "$GL" "$T/gl-game" "$T/gl-icons" >/dev/null 2>&1; rc=$?
+expect "a registry file missing from the game is refused" "3" "$rc"
 unset BOTTLER_RECIPES BOTTLER_PROJECTS
 
 # --- dock-name on a fake CrossOver engine

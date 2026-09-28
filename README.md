@@ -37,7 +37,8 @@ open "projects/alpha-centauri/Alpha Centauri.app"
 ```
 
 A project (`projects/<name>/`, never committed) is one game: which recipe, where
-your copy of the game is, and the built app with the game inside. Rebuilding
+your copy of the game is, and the built app with the game inside. `RECIPE` can
+also be a path to a recipe folder: it is copied into the project and stays local. Rebuilding
 keeps the app's saves. Build as many projects as you like; builds of different
 projects never touch each other. Everything reusable (engines, a clean prefix per
 engine, pinned downloads) is cached in `build/cache/` and cloned into each app,

@@ -17,7 +17,7 @@
 //   bottler menubar hide|restore <marker>    auto-hide the menu bar while playing
 //   bottler recipe-check <recipe.json>       validate a recipe (docs/RECIPES.md)
 //   bottler recipe-field <recipe.json> <field>   one value for the build: title,
-//                                            bundleId, engine, proxy.dll
+//                                            bundleId, engine, proxy.dll, install.registry (one per line)
 //   bottler fetch <recipe-dir> <cache> <out> build time: pinned downloads into <out>
 //   bottler install <recipe-dir> <source> <game-dir> <icon-dir>
 //                                            copy the player's game and apply the recipe
@@ -892,7 +892,7 @@ let recipeKeys: [String: Set<String>] = [
     "": ["schema", "title", "bundleId", "engine", "detect", "install", "launch"],
     "detect": ["required", "fingerprint", "builds", "unknown"],
     "detect.builds.*": ["status", "label", "message"],
-    "install": ["exclude", "rename", "downloads", "ini", "proxy", "appIcon", "exeIcon"],
+    "install": ["exclude", "rename", "downloads", "ini", "proxy", "appIcon", "exeIcon", "registry"],
     "install.downloads[]": ["url", "sha256", "files"],
     "install.ini[]": ["file", "section", "set"],
     "install.proxy": ["dll"],
@@ -917,6 +917,7 @@ struct Recipe: Codable {
     struct Install: Codable {
         var exclude: [String]?; var rename: [String: String]?; var downloads: [Download]?
         var ini: [IniEdit]?; var proxy: Proxy?; var appIcon: String?; var exeIcon: String?
+        var registry: [String]?
     }
     struct Variant: Codable { var label: String; var exe: String; var args: [String]? }
     struct Window: Codable {
@@ -1126,6 +1127,10 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
     for r in recipe.detect.required where !fm.fileExists(atPath: source.appendingPathComponent(r).path) {
         throw InstallRefused(message: "\(r) is missing: this does not look like a \(recipe.title) folder")
     }
+    // the build imports these into the prefix after install (core/build-app.sh)
+    for r in recipe.install?.registry ?? [] where !fm.fileExists(atPath: source.appendingPathComponent(r).path) {
+        throw InstallRefused(message: "\(r) (install.registry) is missing from the game folder")
+    }
     let fingerprint = md5(try Data(contentsOf: source.appendingPathComponent(recipe.detect.fingerprint)))
     let build = recipe.detect.builds?[fingerprint]
     switch build?.status {
@@ -1282,7 +1287,7 @@ func install(recipeDir: URL, source: URL, game: URL, iconDir: URL) throws -> Int
 func shq(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
 /// Resolve the recipe's launch for one variant on one display: compute the window
-/// rect, apply the per-launch INI edits ({x} {y} {w} {h}), and return shell
+/// rect, apply the per-launch INI edits and args ({x} {y} {w} {h}), and return shell
 /// variable assignments for core/launch.sh. BOTTLER_TEST_SCREENS="frame;visible;safeTop;primary"
 /// replaces the real displays (tests).
 func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
@@ -1303,19 +1308,18 @@ func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
     }
     let r = try gameRect(screen: screen, primary: primary, mode: w.mode, align: w.align ?? 1)
     let game = res.appendingPathComponent("game")
+    func geometry(_ s: String) -> String {
+        s.replacingOccurrences(of: "{x}", with: "\(r.x)").replacingOccurrences(of: "{y}", with: "\(r.y)")
+            .replacingOccurrences(of: "{w}", with: "\(r.w)").replacingOccurrences(of: "{h}", with: "\(r.h)")
+    }
     for edit in recipe.launch.ini ?? [] {
-        var values: [String: String] = [:]
-        for (k, val) in edit.set {
-            values[k] = val.replacingOccurrences(of: "{x}", with: "\(r.x)").replacingOccurrences(of: "{y}", with: "\(r.y)")
-                .replacingOccurrences(of: "{w}", with: "\(r.w)").replacingOccurrences(of: "{h}", with: "\(r.h)")
-        }
-        try iniSet(game.appendingPathComponent(edit.file), section: edit.section, values)
+        try iniSet(game.appendingPathComponent(edit.file), section: edit.section, edit.set.mapValues(geometry))
     }
     let overrides = (recipe.launch.dllOverrides ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
     var out = [
         "GX=\(r.x)", "GY=\(r.y)", "GW=\(r.w)", "GH=\(r.h)",
         "GAME_EXE=" + shq("C:\\Game\\" + v.exe.replacingOccurrences(of: "/", with: "\\")),
-        "GAME_ARGS=(" + (v.args ?? []).map(shq).joined(separator: " ") + ")",
+        "GAME_ARGS=(" + (v.args ?? []).map { shq(geometry($0)) }.joined(separator: " ") + ")",
         "WIN_TITLE=" + shq(w.title ?? ""),
         "BACKDROP=" + ((w.backdrop ?? false) ? "1" : "0"),
         "MENUBAR=" + shq(w.menubar ?? "keep"),
@@ -1646,6 +1650,7 @@ case "recipe-field":
         case "bundleId": print(r.bundleId)
         case "engine": print(r.engine)
         case "proxy.dll": print(r.install?.proxy?.dll ?? "")
+        case "install.registry": for f in r.install?.registry ?? [] { print(f) }
         default: fail("bottler recipe-field: unknown field \(args[3])")
         }
     } catch { fail("bottler recipe-field: \(error)") }

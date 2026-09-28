@@ -17,6 +17,7 @@ WORK="$PROJ/.build"; CACHE="$ROOT/build/cache"
 mkdir -p "$WORK" "$CACHE" "$PROJ/logs"
 field() { python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "$PROJ/project.json" "$1"; }
 RECIPE="${BOTTLER_RECIPES:-$ROOT/recipes}/$(field recipe)"   # BOTTLER_RECIPES: tests
+if [ "$(field recipe)" = local ]; then RECIPE="$PROJ/recipe"; fi   # a project's own recipe
 GAME_SRC="$(field game)"
 [ -f "$RECIPE/recipe.json" ] || { echo "ERROR: no recipe at $RECIPE"; exit 2; }
 [ -d "$GAME_SRC" ] || { echo "ERROR: the project's game folder is missing: $GAME_SRC"; exit 2; }
@@ -108,6 +109,20 @@ if [ -d "$APP/Contents/Resources/prefix/drive_c/Game" ]; then
 fi
 if [ -f "$APP/Contents/Resources/launcher.conf" ]; then cp "$APP/Contents/Resources/launcher.conf" "$RES/"; fi
 bash "$RES/bin/install.sh" "$RES" "$GAME_SRC" | tee "$PROJ/logs/install.log"
+# .reg files the game ships (recipe install.registry), imported into this build's
+# fresh prefix: settings a game reads from the registry rather than from its folder
+REGS="$("$BOTTLER" recipe-field "$RECIPE/recipe.json" install.registry)"
+if [ -n "$REGS" ] && [ "$NO_ENGINE" != "--no-engine" ]; then
+    (
+        # shellcheck source=/dev/null
+        . "$RES/bin/wine-env.sh"
+        while IFS= read -r reg; do
+            echo "==> registry: $reg"
+            "$WINE" regedit /S "C:\\Game\\${reg//\//\\}" >>"$PROJ/logs/install.log" 2>&1
+        done <<< "$REGS"
+        "$(dirname "$WINE")/wineserver" -w
+    )
+fi
 # the icon made from the game (recipe install.appIcon) becomes the bundle's icon
 ICON_KEY=""
 if [ -f "$RES/icon/AppIcon.icns" ]; then
