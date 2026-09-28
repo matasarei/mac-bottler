@@ -33,6 +33,12 @@
   with 2960 bytes of room, and indexed PNGs.
 - The developer played a first run, character creation included: "it worked well".
 
+- A custom icon: the old wrapper's round portrait icon, dropped into the project
+  as `projects/nox/icon.icns` (local, never committed), is the app icon and, with
+  `.rsrc` grown (Game.exe's `.rsrc` is its last section), a 256 px Dock icon.
+  Game.exe still starts. The Dock icon has not been checked by eye yet.
+- The launcher goes straight to the game (one variant, one display).
+
 ## CPU
 
 - At the character screen with cnc-ddraw `maxfps=-1` (it follows the display's
