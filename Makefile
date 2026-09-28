@@ -2,7 +2,8 @@
 # See README.md. make is the only entry point; scripts under core/ are internal.
 #
 #   make check                   verify the build prerequisites
-#   make app RECIPE=recipes/<game> [APP=<path>]   build the game's app (default ~/Applications/<title>.app)
+#   make project NAME=<n> RECIPE=<recipe> GAME=<folder>   a new project (projects/<n>/)
+#   make app PROJECT=<n>         build projects/<n>/<title>.app with the game inside
 #   make engine APP=<app> [ENGINE=<name>]   install a pinned Wine engine (engines/)
 #   make prefix APP=<app>        create the app's Wine prefix
 #   make helpers                 build the Windows helpers into build/win/
@@ -17,7 +18,7 @@ ENGINE ?= crossover-23
 RES     = $(APP)/Contents/Resources
 DEPS    = build/deps
 
-.PHONY: help check app engine prefix helpers test compile
+.PHONY: help check project app engine prefix helpers test compile
 
 help:
 	@sed -n '1,/^$$/p' Makefile | sed 's/^# \{0,1\}//'
@@ -42,9 +43,13 @@ helpers:
 	@i686-w64-mingw32-gcc -O2 -mwindows -o build/win/bottler-place.exe win/place.c
 	@echo "==> build/win/bottler-place.exe"
 
+project:
+	@[ -n "$(NAME)" ] && [ -n "$(RECIPE)" ] && [ -n "$(GAME)" ] || { echo "usage: make project NAME=<n> RECIPE=<recipe> GAME=<folder>"; exit 2; }
+	@core/project.sh "$(NAME)" "$(RECIPE)" "$(GAME)"
+
 app:
-	@[ -n "$(RECIPE)" ] || { echo "usage: make app RECIPE=recipes/<game> [APP=<path>]"; exit 2; }
-	@core/build-app.sh "$(RECIPE)" "$(filter-out build/bottler-test.app,$(APP))"
+	@[ -n "$(PROJECT)" ] || { echo "usage: make app PROJECT=<name>"; exit 2; }
+	@core/build-app.sh "projects/$(PROJECT)"
 
 compile:
 	@swiftc -typecheck tools/bottler.swift

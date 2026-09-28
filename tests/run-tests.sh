@@ -309,17 +309,37 @@ rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
 if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
 unset BOTTLER_TEST_SCREENS
 
-# --- core/build-app.sh: bundle structure from the minimal fixture recipe (no engine)
-B="$T/Bottler Test.app"
-if core/build-app.sh tests/fixtures/recipe-min "$B" --no-engine >/dev/null 2>&1; then ok; else bad "build-app exits 0"; fi
-expect "bundle id from the recipe" "com.matasarei.bottler.test" "$(defaults read "$PWD/$B/Contents/Info" CFBundleIdentifier 2>/dev/null)"
-expect "bundle name from the recipe" "Bottler Test" "$(defaults read "$PWD/$B/Contents/Info" CFBundleName 2>/dev/null)"
-if file "$B/Contents/MacOS/launcher" 2>/dev/null | grep -q "Mach-O 64-bit executable"; then ok; else bad "launcher binary built"; fi
-for f in bottler bottler-place.exe install.sh launch.sh wine-env.sh; do
-    if [ -s "$B/Contents/Resources/bin/$f" ]; then ok; else bad "bundle has bin/$f"; fi
+# --- projects: make project, and two projects built at the same time (no engine)
+export BOTTLER_RECIPES="$PWD/$T/recipes" BOTTLER_PROJECTS="$PWD/$T/projects"
+mkdir -p "$BOTTLER_RECIPES"; cp -R tests/fixtures/recipe-min "$BOTTLER_RECIPES/min"
+GA="$T/game-a"; GB="$T/game-b"; mkdir -p "$GA/saves" "$GB"
+pe "$GA/Game.exe" --imports KERNEL32.dll --icons 16,32,48; cp "$GA/Game.exe" "$GB/Game.exe"
+if core/project.sh one min "$GA" >/dev/null && core/project.sh two min "$GB" >/dev/null; then ok; else bad "make project creates two projects"; fi
+expect "project.json records recipe and game" "min $PWD/$GA" \
+    "$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['recipe'], d['game'])" "$BOTTLER_PROJECTS/one/project.json")"
+core/project.sh one min "$GA" >/dev/null 2>&1; rc=$?; expect "an existing project is not overwritten" "2" "$rc"
+core/project.sh "Bad Name" min "$GA" >/dev/null 2>&1; rc=$?; expect "a bad project name is refused" "2" "$rc"
+core/build-app.sh "$BOTTLER_PROJECTS/one" --no-engine > "$T/build-one.log" 2>&1 & P1=$!
+core/build-app.sh "$BOTTLER_PROJECTS/two" --no-engine > "$T/build-two.log" 2>&1 & P2=$!
+wait $P1; r1=$?; wait $P2; r2=$?
+expect "two projects build at the same time" "0 0" "$r1 $r2"
+for n in one two; do
+    B="$BOTTLER_PROJECTS/$n/Bottler Test.app"
+    expect "$n: bundle id from the recipe" "com.matasarei.bottler.test" "$(defaults read "$B/Contents/Info" CFBundleIdentifier 2>/dev/null)"
+    expect "$n: the icon made from the game is the bundle icon" "AppIcon" "$(defaults read "$B/Contents/Info" CFBundleIconFile 2>/dev/null)"
+    if [ -s "$B/Contents/Resources/AppIcon.icns" ]; then ok; else bad "$n: AppIcon.icns in Resources"; fi
+    if [ -f "$B/Contents/Resources/prefix/drive_c/Game/Game.exe" ] && [ -e "$B/Contents/Resources/game/Game.exe" ]; then ok; else bad "$n: game installed at build time"; fi
+    if file "$B/Contents/MacOS/launcher" 2>/dev/null | grep -q "Mach-O 64-bit executable"; then ok; else bad "$n: launcher built"; fi
+    for f in bottler bottler-place.exe install.sh launch.sh wine-env.sh; do
+        if [ -s "$B/Contents/Resources/bin/$f" ]; then ok; else bad "$n: bundle has bin/$f"; fi
+    done
+    if codesign -v "$B" 2>/dev/null; then ok; else bad "$n: bundle seal verifies"; fi
+    if [ ! -e "$BOTTLER_PROJECTS/$n/.build/Bottler Test.app" ]; then ok; else bad "$n: no half-built app left in .build"; fi
 done
-expect "recipe copied into the bundle" "Bottler Test" "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['title'])" "$B/Contents/Resources/recipe/recipe.json" 2>/dev/null)"
-if codesign -v "$B" 2>/dev/null; then ok; else bad "bundle seal verifies"; fi
+echo "played" > "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/game/saves/slot.sav"
+if core/build-app.sh "$BOTTLER_PROJECTS/one" --no-engine > "$T/rebuild.log" 2>&1; then ok; else bad "rebuild exits 0"; fi
+expect "a rebuild keeps the app's saves" "played" "$(cat "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/game/saves/slot.sav" 2>/dev/null)"
+unset BOTTLER_RECIPES BOTTLER_PROJECTS
 
 # --- dock-name on a fake CrossOver engine
 E="$T/engine/wine"; mkdir -p "$E/bin" "$E/lib/wine/x86_64-unix"

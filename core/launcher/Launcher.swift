@@ -1,12 +1,13 @@
-// The launcher window every bottler-built app shares. It reads the recipe
-// (Resources/recipe/recipe.json) and shows only what the player can choose:
-// install the game from a folder, then the game variant (if the recipe has
-// several), the display (if several are connected) and Play. Everything else is
-// decided per launch by Resources/bin/launch.sh.
+// The launcher window every mac-bottler app shares. The game is installed when
+// the app is built, so it shows only what the player can choose: the game variant
+// (if the recipe has several), the display (if several are connected) and Play.
+// Everything else is decided per launch by Resources/bin/launch.sh.
 import AppKit
 import SwiftUI
 
 let resources = Bundle.main.resourceURL!
+/// True while the game runs: the window is put away then, which must not quit the app.
+var playing = false
 let bin = resources.appendingPathComponent("bin")
 
 struct Variant: Decodable { let label: String }
@@ -72,10 +73,9 @@ func runScript(_ name: String, _ args: [String], output: @escaping (String) -> V
 }
 
 final class Model: ObservableObject {
-    @Published var installed = FileManager.default.fileExists(
+    let installed = FileManager.default.fileExists(
         atPath: resources.appendingPathComponent("game/.bottler-install.json").path)
     @Published var busy = false
-    @Published var status = ""
     @Published var error = ""
     @Published var variant: Int
     @Published var display: String
@@ -94,48 +94,19 @@ final class Model: ObservableObject {
         }
     }
 
-    func chooseFolderAndInstall() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.message = "Choose the folder with your copy of \(recipe.title)."
-        panel.prompt = "Install"
-        guard panel.runModal() == .OK, let folder = panel.url else { return }
-        busy = true; error = ""; status = "Installing…"
-        runScript("install.sh", [resources.path, folder.path], output: { [weak self] s in
-            if let last = s.split(separator: "\n").last { self?.status = String(last) }
-        }, done: { [weak self] code, stderr in
-            guard let self else { return }
-            self.busy = false
-            if code == 0 {
-                self.installed = true; self.status = ""
-                self.applyIcon()
-            } else {
-                self.status = ""
-                self.error = stderr.split(separator: "\n").last.map { String($0).replacingOccurrences(of: "bottler install: refused: ", with: "") }
-                    ?? "The installation failed (code \(code))."
-            }
-        })
-    }
-
-    /// The icon made from the player's own game becomes the app's icon.
-    func applyIcon() {
-        let icns = resources.appendingPathComponent("icon/AppIcon.icns")
-        if let image = NSImage(contentsOf: icns) {
-            NSWorkspace.shared.setIcon(image, forFile: Bundle.main.bundlePath, options: [])
-            NSApp.applicationIconImage = image
-        }
-    }
+    /// The launcher's window: closed while the game runs, shown again after.
+    var window: NSWindow? { NSApp.windows.first { $0.isVisible || $0.title == recipe.title } }
 
     func play() {
         Conf.write(["VARIANT": String(variant), "DISPLAY": display])
-        busy = true; error = ""; status = "Playing…"
-        NSApp.hide(nil)
+        busy = true; error = ""; playing = true
+        let w = window
+        w?.orderOut(nil)
         runScript("launch.sh", [resources.path, String(variant), display], output: { _ in }, done: { [weak self] code, _ in
             guard let self else { return }
-            self.busy = false; self.status = ""
-            if code == 2 { self.error = "The game could not be started. See Resources/logs/last-launch.log." }
-            NSApp.unhide(nil)
+            self.busy = false; playing = false
+            if code == 2 { self.error = "The game could not be started. See Contents/Resources/logs/last-launch.log." }
+            w?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         })
     }
@@ -168,18 +139,11 @@ struct LauncherView: View {
                 .keyboardShortcut(.defaultAction)
                 .controlSize(.large)
                 .disabled(model.busy)
-                Button("Install from another folder…", action: model.chooseFolderAndInstall)
-                    .buttonStyle(.link).font(.footnote).disabled(model.busy)
             } else {
-                Text("Choose the folder with your copy of \(recipe.title). It is copied into this app; the original folder is not changed.")
+                Text("This app was built without its game. Rebuild it with make app.")
                     .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 340)
-                Button(action: model.chooseFolderAndInstall) {
-                    Text("Install game…").font(.title3).frame(maxWidth: 200).padding(.vertical, 4)
-                }
-                .keyboardShortcut(.defaultAction).controlSize(.large).disabled(model.busy)
             }
             if model.busy { ProgressView().controlSize(.small) }
-            if !model.status.isEmpty { Text(model.status).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
             if !model.error.isEmpty {
                 Text(model.error).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center).frame(maxWidth: 360)
             }
@@ -203,5 +167,5 @@ struct LauncherApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     // the window hides while playing; an app quit in that state would reopen hidden
     func applicationDidFinishLaunching(_ note: Notification) { NSApp.unhide(nil) }
-    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { !playing }
 }

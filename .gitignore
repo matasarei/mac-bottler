@@ -1,4 +1,6 @@
 build/
+# local projects: your game's path and apps with the game inside; never committed
+projects/
 .DS_Store
 
 # local agent/task state; the shared skills in .claude/skills/ are committed
