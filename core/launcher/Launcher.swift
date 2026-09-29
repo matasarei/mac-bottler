@@ -1,8 +1,9 @@
 // The launcher every mac-bottler app shares. The game is installed when the app is
 // built, so the window shows only what the player can choose: the game variant (if
 // the recipe has several), the display (if several are connected) and Play. With
-// nothing to choose there is no window: the game starts at once and the app quits
-// with it (hold Option while opening the app to see the window anyway). The app is
+// nothing to choose, or with "start right away" ticked, there is no window: the
+// game starts at once and the app quits with it (hold Option while opening the app
+// to see the window anyway; Decision.swift decides). The app is
 // a background app (LSUIElement) and takes a Dock tile only while its window shows.
 // Everything else is decided per launch by Resources/bin/launch.sh.
 import AppKit
@@ -83,11 +84,17 @@ final class Model: ObservableObject {
     @Published var variant: Int
     @Published var display: String
     @Published var displays = connectedDisplays()
+    /// Start the remembered variant on the remembered display at once, next time.
+    @Published var autorun: Bool
+    /// The remembered display is connected (autorun falls back to the window if not).
+    let rememberedDisplayFound: Bool
 
     init() {
         let conf = Conf.read()
         variant = min(Int(conf["VARIANT"] ?? "0") ?? 0, recipe.launch.variants.count - 1)
         display = conf["DISPLAY"] ?? "main"
+        autorun = conf["AUTORUN"] == "1"
+        rememberedDisplayFound = connectedDisplays().contains { $0.id == (conf["DISPLAY"] ?? "main") }
         if !displays.contains(where: { $0.id == display }) { display = "main" }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -100,14 +107,21 @@ final class Model: ObservableObject {
     /// The launcher's window: put away while the game runs, shown again after.
     var window: NSWindow? { launcherWindow }
 
-    /// Nothing to choose: one variant, one display (and the game is installed).
-    var nothingToChoose: Bool { installed && recipe.launch.variants.count == 1 && displays.count == 1 }
+    /// Something to choose in the window: several variants or several displays.
+    var hasChoice: Bool { recipe.launch.variants.count > 1 || displays.count > 1 }
+
+    /// Opening the app starts the game at once (Decision.swift).
+    func opensStraightIntoGame(optionHeld: Bool) -> Bool {
+        startsDirectly(installed: installed, variants: recipe.launch.variants.count,
+                                displays: displays.count, autorun: autorun,
+                                rememberedDisplayConnected: rememberedDisplayFound, optionHeld: optionHeld)
+    }
 
     /// Starts the game. With a window, it is put away while the game runs and shown
     /// again after; without one (`direct`), the app quits with the game unless the
     /// game could not be started, which the window then explains.
     func play(direct: Bool = false) {
-        Conf.write(["VARIANT": String(variant), "DISPLAY": display])
+        Conf.write(["VARIANT": String(variant), "DISPLAY": display, "AUTORUN": autorun ? "1" : "0"])
         busy = true; error = ""; playing = true
         let w = window
         w?.orderOut(nil)
@@ -129,7 +143,9 @@ final class Model: ObservableObject {
 var launcherWindow: NSWindow?
 func showWindow(_ model: Model) {
     if launcherWindow == nil {
-        let w = NSWindow(contentViewController: NSHostingController(rootView: LauncherView(model: model)))
+        let host = NSHostingController(rootView: LauncherView(model: model))
+        host.sizingOptions = [.preferredContentSize]   // the window follows its content (an error, a new display)
+        let w = NSWindow(contentViewController: host)
         w.title = recipe.title
         w.styleMask = [.titled, .closable, .miniaturizable]
         w.isReleasedWhenClosed = false
@@ -162,6 +178,12 @@ struct LauncherView: View {
                     }
                     .frame(maxWidth: 320)
                 }
+                if model.hasChoice {
+                    Toggle(isOn: $model.autorun) {
+                        Text("Start \(recipe.launch.variants[model.variant].label) right away next time")
+                    }
+                    .help("Opening the app then starts the game at once. Hold ⌥ Option while opening it to see this window.")
+                }
                 Button(action: { model.play() }) {
                     Text("Play").font(.title2).frame(maxWidth: 200).padding(.vertical, 6)
                 }
@@ -174,7 +196,8 @@ struct LauncherView: View {
             }
             if model.busy { ProgressView().controlSize(.small) }
             if !model.error.isEmpty {
-                Text(model.error).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center).frame(maxWidth: 360)
+                Text(model.error).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 360)
             }
         }
         .padding(28)
@@ -200,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.mainMenu = mainMenu()
         NSApp.unhide(nil)   // an app quit while hidden (its window put away) reopens hidden
-        if model.nothingToChoose && !NSEvent.modifierFlags.contains(.option) {
+        if model.opensStraightIntoGame(optionHeld: NSEvent.modifierFlags.contains(.option)) {
             model.play(direct: true)
         } else {
             showWindow(model)

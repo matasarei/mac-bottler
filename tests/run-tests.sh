@@ -503,6 +503,11 @@ expect "the project's icon is the app icon" "255 0 0 255" "$(rgb "$BOTTLER_PROJE
 if [ "$(md5 -q "$CG/Game.exe")" != "$EXE1" ] && [ "$(md5 -q "$CG/Game.exe.bkp")" = "$(md5 -q "$GA/Game.exe")" ]; then ok; else bad "a changed icon re-patches the exe from the stock .bkp"; fi
 unset BOTTLER_RECIPES BOTTLER_PROJECTS
 
+# --- the launcher's decision: straight to the game, or the window
+mkdir -p "$T/decision"; cp tests/fixtures/decision-test.swift "$T/decision/main.swift"   # top-level code: main.swift
+if swiftc -o "$T/decision-test" core/launcher/Decision.swift "$T/decision/main.swift" 2>"$T/decision.err" \
+   && "$T/decision-test" > "$T/decision.out"; then ok; else bad "launcher decision: $(cat "$T/decision.err" "$T/decision.out" 2>/dev/null | head -5)"; fi
+
 # --- dock-name on a fake CrossOver engine
 E="$T/engine/wine"; mkdir -p "$E/bin" "$E/lib/wine/x86_64-unix"
 PL='<?xml version="1.0"?><plist version="1.0"><dict>

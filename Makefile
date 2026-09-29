@@ -55,7 +55,7 @@ app:
 
 compile:
 	@swiftc -typecheck tools/bottler.swift
-	@swiftc -typecheck -parse-as-library core/launcher/Launcher.swift
+	@swiftc -typecheck -parse-as-library core/launcher/Launcher.swift core/launcher/Decision.swift
 	@echo "==> Swift sources type-check"
 
 lint:
