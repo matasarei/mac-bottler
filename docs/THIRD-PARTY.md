@@ -14,8 +14,8 @@ always the player's own copy: it is read from the folder given to
 
 | Component | Used for | License | Where it comes from |
 |---|---|---|---|
-| WineskinCX 23.7.1 engine (CrossOver 23 / Wine 8.0.1) | default Wine engine | Wine: LGPL-2.1; CrossOver's Wine sources are published by CodeWeavers under the LGPL | read from the local Wineskin Winery install (`~/Library/Application Support/Wineskin/Engines`), SHA256-pinned in `engines/crossover-23.env`; not redistributed |
-| Wineskin 3.0.6_3 wrapper frameworks (FreeType, GnuTLS, GStreamer, …) | libraries the CrossOver engine loads | each library's own license (LGPL / MIT / FreeType License …) | read from the local Wineskin wrapper template, pinned by `core/tree-sha.sh`; not redistributed |
+| WineskinCX 23.7.1 engine (CrossOver 23 / Wine 8.0.1) | default Wine engine | Wine: LGPL-2.1; CrossOver's Wine sources are published by CodeWeavers under the LGPL | downloaded at build time from the Wineskin project's releases (github.com/The-Wineskin-Project/Engines), or taken from a local Wineskin install with the same checksum; SHA256-pinned in `engines/crossover-23.env`; not redistributed |
+| Wineskin 3.0.6_3 wrapper frameworks (FreeType, GnuTLS, GStreamer, …) | libraries the CrossOver engine loads | each library's own license (LGPL / MIT / FreeType License …) | from the Wineskin 3.0.6_3 wrapper release (github.com/The-Wineskin-Project/Wrapper, archive SHA256-pinned) or a local Wineskin install; the folder is pinned by `core/tree-sha.sh`; not redistributed |
 | WoWSilicon Wine runtime r17 (WineAndAqua Wine 11.13 + mtld3d) | optional engine | Wine: LGPL-2.1; mtld3d and packaging: see WoWSilicon | downloaded from WoWSilicon's GitHub release, SHA256-pinned in `engines/wowsilicon-r17.env` |
 | Thinker mod v5.5 (Alpha Centauri recipe) | engine fixes, windowed mode, CPU idle fix | MIT ("Copyright (c) Thinker Mod authors") | downloaded from induktio/thinker's GitHub release, SHA256-pinned in `recipes/alpha-centauri/recipe.json` |
 
