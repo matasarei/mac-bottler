@@ -418,9 +418,11 @@ rm -f "$L/calls"; STUB_RC=5 bash "$L/bin/launch.sh" "$L" 0 main; rc=$?
 expect "a failing game's exit code is passed on" "5" "$rc"
 expect "desktop restored even when the game fails" "desktop restore $STATE/desktop.json" "$(tail -1 "$L/calls")"
 # killed (Force Quit, logout): the menu bar and Dock still come back
-rm -f "$L/calls"; STUB_SLEEP=1 bash "$L/bin/launch.sh" "$L" 0 main & LP=$!
-sleep 0.4; kill -TERM $LP; wait $LP 2>/dev/null
-expect "desktop restored when the launch is killed (TERM)" "desktop restore $STATE/desktop.json" "$(tail -1 "$L/calls" 2>/dev/null)"
+rm -f "$L/calls" "$L/wine.calls"; STUB_SLEEP=2 bash "$L/bin/launch.sh" "$L" 0 main & LP=$!
+# kill it while the game runs: wait until the stub game has actually started
+for _ in $(seq 1 50); do grep -q "bottler-place" "$L/wine.calls" 2>/dev/null && break; sleep 0.1; done
+kill -TERM $LP; wait $LP 2>/dev/null
+expect "desktop restored when the launch is killed mid-game (TERM)" "$(printf 'desktop save %s\ndesktop restore %s' "$STATE/desktop.json" "$STATE/desktop.json")" "$(grep '^desktop' "$L/calls" 2>/dev/null)"
 expect "variant without args" "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\thinker.exe" "$(grep '^ARGS:' "$L/wine.log")"
 rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
 if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
