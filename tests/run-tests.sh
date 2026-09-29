@@ -379,6 +379,7 @@ cat > "$L/wine/bin/wine64" <<STUB
 #!/bin/bash
 echo "\$*" >> "$L/wine.calls"
 { echo "ARGS: \$*"; echo "CWD: \$PWD"; env | grep -E '^(WINEPREFIX|HOME|WINEDLLOVERRIDES|WINEMSYNC|GAME_MODE|DYLD_FALLBACK_LIBRARY_PATH)='; } > "$L/wine.log"
+sleep "\${STUB_SLEEP:-0}"
 exit "\${STUB_RC:-0}"
 STUB
 printf '#!/bin/bash\nexit 0\n' > "$L/wine/bin/wineserver"
@@ -416,6 +417,12 @@ expect "desktop: snapshot taken, menu bar hidden, frame started, snapshot restor
 rm -f "$L/calls"; STUB_RC=5 bash "$L/bin/launch.sh" "$L" 0 main; rc=$?
 expect "a failing game's exit code is passed on" "5" "$rc"
 expect "desktop restored even when the game fails" "desktop restore $STATE/desktop.json" "$(tail -1 "$L/calls")"
+# killed (Force Quit, logout): the menu bar and Dock still come back
+rm -f "$L/calls" "$L/wine.calls"; STUB_SLEEP=2 bash "$L/bin/launch.sh" "$L" 0 main & LP=$!
+# kill it while the game runs: wait until the stub game has actually started
+for _ in $(seq 1 50); do grep -q "bottler-place" "$L/wine.calls" 2>/dev/null && break; sleep 0.1; done
+kill -TERM $LP; wait $LP 2>/dev/null
+expect "desktop restored when the launch is killed mid-game (TERM)" "$(printf 'desktop save %s\ndesktop restore %s' "$STATE/desktop.json" "$STATE/desktop.json")" "$(grep '^desktop' "$L/calls" 2>/dev/null)"
 expect "variant without args" "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\thinker.exe" "$(grep '^ARGS:' "$L/wine.log")"
 rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
 if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
@@ -486,6 +493,24 @@ expect "a rebuild keeps the app's saves" "played" "$(cat "$BOTTLER_PROJECTS/one/
 printf 'WINE REGISTRY Version 2\n\n[Software\\\\Game\\\\Settings] 1\n"Mode"="played"\n' > "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/prefix/user.reg"
 core/build-app.sh "$BOTTLER_PROJECTS/one" --no-engine > "$T/rebuild2.log" 2>&1
 if grep -q '"Mode"="played"' "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/prefix/user.reg" 2>/dev/null; then ok; else bad "a rebuild keeps the game's registry settings (user.reg)"; fi
+# a rebuild that fails after the game step must not cost the saves: the old app keeps
+# its game folder, and the retry (whose first act is rm -rf of the half-built app) too
+SR="$T/safe-recipe"; cp -R tests/fixtures/recipe-min "$SR"
+core/project.sh safe "$SR" "$GA" >/dev/null
+core/build-app.sh "$BOTTLER_PROJECTS/safe" --no-engine > "$T/safe1.log" 2>&1
+SAVE="$BOTTLER_PROJECTS/safe/Bottler Test.app/Contents/Resources/game/saves/slot.sav"
+mkdir -p "$(dirname "$SAVE")"; echo "precious" > "$SAVE"
+cp "$BOTTLER_PROJECTS/safe/recipe/recipe.json" "$T/safe-recipe.good"
+python3 - "$BOTTLER_PROJECTS/safe/recipe/recipe.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["install"]["registry"] = ["missing.reg"]; json.dump(d, open(sys.argv[1], "w"))
+PY
+core/build-app.sh "$BOTTLER_PROJECTS/safe" --no-engine > "$T/safe2.log" 2>&1; rc=$?
+if [ $rc -ne 0 ]; then ok; else bad "the broken recipe makes the build fail (setup for the next checks)"; fi
+expect "a failed rebuild leaves the old app's saves in place" "precious" "$(cat "$SAVE" 2>/dev/null)"
+cp "$T/safe-recipe.good" "$BOTTLER_PROJECTS/safe/recipe/recipe.json"
+core/build-app.sh "$BOTTLER_PROJECTS/safe" --no-engine > "$T/safe3.log" 2>&1
+expect "the retry after a failed rebuild still has the saves" "precious" "$(cat "$SAVE" 2>/dev/null)"
 
 # a local recipe: a folder given instead of a name is copied into the project (never committed)
 LOCAL="$T/my-recipe"; cp -R tests/fixtures/recipe-min "$LOCAL"

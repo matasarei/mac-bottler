@@ -73,9 +73,10 @@ them is Claude-specific.
   observe (sound, feel, "does it play right"), batched into one question.
 - **Record what was tried.** Every attempt, including failures and why, goes into
   the recipe's `notes.md`.
-- **Never rebuild an app while its game runs**: the rebuild moves the game folder,
-  with the player's saves, into the new app. Check first:
-  `pgrep -f "projects/<name>/.*Resources/wine"`.
+- **Never rebuild an app while its game runs**: the rebuild copies the game folder,
+  with the player's saves, into the new app and then replaces the old one; whatever
+  the game saves after the copy is lost. Check first:
+  `pgrep -f "<Title>.app/Contents/Resources/wine"` (matches the app wherever it is, `/Applications` included).
 - **Say before you take over the screen.** A test launch opens a full-screen game
   on the player's display: announce it and how long it stays, close it after, and
   leave a game the player is using alone.

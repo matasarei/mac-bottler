@@ -173,6 +173,10 @@ found on; the lesson is written so it applies to other games too.
   (`prefix/user.reg`), where some games keep their options (Counter-Strike's
   video settings). Everything else in the prefix comes fresh from the cache; the
   recipe's `install.registry` files are imported on top at every build.
+- **The game folder is cloned into the new app, never moved** (`cp -c`, instant on
+  APFS), and the old app is replaced only once the new one is complete. It used to
+  be moved first: a build that then failed left the saves in the half-built app,
+  and the next build, which starts by deleting that, lost them.
 
 ## Focus
 
