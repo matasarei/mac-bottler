@@ -154,6 +154,14 @@ found on; the lesson is written so it applies to other games too.
   `secdrv.sys`, `drvmgt.dll`) even in digital releases; they are not needed and
   are excluded at install.
 
+## Rebuilds
+
+- **A rebuild keeps what the player made:** the game folder (saves, INI
+  settings), `launcher.conf`, and the Wine registry for the user
+  (`prefix/user.reg`), where some games keep their options (Counter-Strike's
+  video settings). Everything else in the prefix comes fresh from the cache; the
+  recipe's `install.registry` files are imported on top at every build.
+
 ## Focus
 
 - **A game started without the launcher window never became the active app**

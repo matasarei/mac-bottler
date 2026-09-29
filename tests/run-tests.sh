@@ -464,6 +464,10 @@ done
 echo "played" > "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/game/saves/slot.sav"
 if core/build-app.sh "$BOTTLER_PROJECTS/one" --no-engine > "$T/rebuild.log" 2>&1; then ok; else bad "rebuild exits 0"; fi
 expect "a rebuild keeps the app's saves" "played" "$(cat "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/game/saves/slot.sav" 2>/dev/null)"
+# settings a game keeps in Wine's registry (HKCU, prefix/user.reg) survive a rebuild too
+printf 'WINE REGISTRY Version 2\n\n[Software\\\\Game\\\\Settings] 1\n"Mode"="played"\n' > "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/prefix/user.reg"
+core/build-app.sh "$BOTTLER_PROJECTS/one" --no-engine > "$T/rebuild2.log" 2>&1
+if grep -q '"Mode"="played"' "$BOTTLER_PROJECTS/one/Bottler Test.app/Contents/Resources/prefix/user.reg" 2>/dev/null; then ok; else bad "a rebuild keeps the game's registry settings (user.reg)"; fi
 
 # a local recipe: a folder given instead of a name is copied into the project (never committed)
 LOCAL="$T/my-recipe"; cp -R tests/fixtures/recipe-min "$LOCAL"
