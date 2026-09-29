@@ -1859,7 +1859,9 @@ case "shot":
                         .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
                     fail("bottler shot: the app has no window on screen")
                 }
-                captureArgs += ["-R\(Int(w.frame.minX)),\(Int(w.frame.minY)),\(Int(w.frame.width)),\(Int(w.frame.height))"]
+                // the window itself, not the screen area it covers: another app on top
+                // would otherwise be judged as the game's picture
+                captureArgs += ["-o", "-l", String(w.number)]
             default: fail("bottler shot: unknown option \(args[3])")
             }
         }
