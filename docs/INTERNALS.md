@@ -33,8 +33,12 @@ found on; the lesson is written so it applies to other games too.
   backdrop behind it (`bottler frame`). *Alpha Centauri.*
 - **The macOS menu bar hides only for windows that cover the whole screen.** A
   pillarboxed window never does, so the launcher turns on the global "automatically
-  hide the menu bar" preference for the session and restores it on quit (with a
-  marker file, so a crashed run is restored by the next one). *Alpha Centauri.*
+  hide the menu bar" preference for the session. Before the game starts it records
+  the menu bar and Dock settings in a snapshot outside every app
+  (`~/Library/Application Support/mac-bottler`) and puts both back when the game
+  ends; a snapshot a crashed run left is kept, since it holds the real settings. A
+  marker inside the app was lost when a killed run's app was rebuilt, and the menu
+  bar stayed hidden. *Alpha Centauri, Counter-Strike.*
 - **Games assume their window starts at the screen's top-left.** Once the window
   is centred, `GetCursorPos` (screen coordinates) no longer matches what the game
   expects; edge scrolling breaks on the side away from the origin. Fix: a proxy DLL
@@ -55,7 +59,34 @@ found on; the lesson is written so it applies to other games too.
   cursor lock needs `devmode=true`. Scaled output lost menu text until
   `minfps` forced redraws. GOG ships cnc-ddraw with some games (Nox): a local
   `ddraw.dll` is loaded even when the game does not use DirectDraw, and its hooks
-  cost CPU, so set it aside when the game runs in GDI mode.
+  cost CPU, so set it aside when the game runs in GDI mode. With Nox the same
+  wrapper drew fine through OpenGL, borderless with the aspect kept; its default
+  frame rate follows the display (120 Hz), so cap it (`maxfps=60`).
+- **Moving an OpenGL game's window turns its picture black.** Counter-Strike
+  (Half-Life 1.1, OpenGL) drew in a window it placed itself and went black as
+  soon as `bottler-place` moved it, every time. Window mode `game` never moves
+  the window.
+- **A full-screen display-mode switch from an old OpenGL game stayed black**
+  (Counter-Strike at 1728x1080 from the command line). Switching to full screen
+  from the game's own options, once it runs in a window, works.
+- **A full-screen game started without the focus hides itself**, and some games
+  draw nothing until focused: bring the game to the front before judging a black
+  or missing window.
+- **Games list the display in pixels** (3456x2160 on a 14" MacBook Pro) while
+  Wine's `RetinaMode=n` makes a Windows pixel a macOS point: that size is twice the
+  screen. Pick the point size (1728-class); old engines have no HUD scaling, so
+  the pixel size would make text half as big.
+
+## Launching
+
+- **Old games parse their own command line.** `bottler-place` quoted every
+  argument (`"-game" "cstrike"`), and Half-Life 1.1 then saw no options at all: it
+  started Half-Life instead of Counter-Strike, full screen and black. Arguments
+  are now quoted only when they must be (`win/cmdline.h`, the CommandLineToArgvW
+  rules).
+- **Settings in the registry beat the command line** in some games
+  (Counter-Strike's "run in a window"): seed or change them in the registry, not
+  only in `args`.
 
 ## Installing
 
@@ -146,3 +177,14 @@ found on; the lesson is written so it applies to other games too.
   idle; Thinker's built-in idle fix brought it to ~10%. The standalone
   smac-cpu-fix (a PeekMessageA wait hook) had no effect under Wine, and
   cnc-ddraw's `maxgameticks`/`limiter_type` did not either.
+
+## Games that did not bottle (yet)
+
+- **Counter-Strike 1.6, Steam.** Steam's Mac build is 32-bit and cannot run on
+  macOS 10.15 or later; the 2023 25th anniversary update added no 64-bit Mac
+  build. The Windows build needs the Steam client running (inside Wine). Xash3D
+  FWGS builds natively for Apple Silicon in seconds and runs Steam's files, but
+  its client (cs16-client) needs current Steam data
+  (`sprites/scope_arc_{nw,ne,sw}.tga`); with 2002-era data, creating a game
+  crashed, and it has its own menu instead of Steam's VGUI2 one. A copy that
+  runs without Steam is a modified copy: its recipe belongs in `recipes.local/`.
