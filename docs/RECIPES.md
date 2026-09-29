@@ -13,7 +13,8 @@ after `recipes/`. For a one-off, it can also live in its project: `make project 
 GAME=…` copies the folder to `projects/<name>/recipe/` (git-ignored) and the
 project builds from it. `bottler recipe-check
 recipes/<game>/recipe.json` validates it; unknown keys are errors, so a typo fails
-the build instead of the game.
+the build instead of the game. Every path in a recipe is relative to the game folder:
+absolute paths and `..` are refused.
 
 ## Build time and install time
 

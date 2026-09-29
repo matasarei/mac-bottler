@@ -1142,6 +1142,12 @@ func checkRecipe(_ url: URL) -> [String] {
     for (from, to) in recipe.install?.rename ?? [:] where !isSafeRelative(from) || !isSafeRelative(to) {
         errors.append("rename entry is not relative: \(from) -> \(to)")
     }
+    // files an install or a launch writes (INI edits, the exe icon) or reads, inside the game
+    let inGame: [(String, String)] = (recipe.install?.ini ?? []).map { ("install.ini file", $0.file) }
+        + (recipe.launch.ini ?? []).map { ("launch.ini file", $0.file) }
+        + (recipe.install?.registry ?? []).map { ("install.registry", $0) }
+        + [recipe.install?.appIcon, recipe.install?.exeIcon].compactMap { $0 }.map { ("install icon exe", $0) }
+    for (field, p) in inGame where !isSafeRelative(p) { errors.append("\(field) is not inside the game folder: \(p)") }
     if let p = recipe.install?.proxy {
         if !p.dll.lowercased().hasSuffix(".dll") || !isSafeRelative(p.dll) { errors.append("proxy dll must be a .dll inside the game: \(p.dll)") }
     }
