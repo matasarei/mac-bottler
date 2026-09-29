@@ -75,8 +75,8 @@ the build instead of the game.
 | Key | Meaning |
 |---|---|
 | `schema` | always `1` for now |
-| `title` | app and window name shown to the player |
-| `bundleId` | the app's bundle identifier |
+| `title` | app and window name shown to the player; 1–64 bytes, no `/` or `:`, no control characters, not starting with a dot (it names the app's folder); `&` and `<` are fine (escaped in Info.plist) |
+| `bundleId` | the app's bundle identifier: dot-separated letters, digits and dashes (`com.example.game`) |
 | `engine` | a file name in `engines/` without `.env` |
 | `detect.required` | paths that must exist in the chosen game folder |
 | `detect.fingerprint` | the file whose md5 identifies the build |

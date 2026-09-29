@@ -147,13 +147,16 @@ if [ -f "$RES/icon/AppIcon.icns" ]; then
 fi
 
 VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
+# Info.plist is XML: a title like "Might & Magic" must be escaped there
+xml() { local v="${1//&/&amp;}"; v="${v//</&lt;}"; printf '%s' "${v//>/&gt;}"; }
+XTITLE="$(xml "$TITLE")"
 cat > "$NEW/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>$TITLE</string>
-    <key>CFBundleDisplayName</key><string>$TITLE</string>
+    <key>CFBundleName</key><string>$XTITLE</string>
+    <key>CFBundleDisplayName</key><string>$XTITLE</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>launcher</string>
     $ICON_KEY
@@ -162,7 +165,7 @@ cat > "$NEW/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSMicrophoneUsageDescription</key><string>$TITLE uses the microphone for in-game voice chat.</string>
+    <key>NSMicrophoneUsageDescription</key><string>$XTITLE uses the microphone for in-game voice chat.</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
 </dict>

@@ -1115,6 +1115,15 @@ func checkRecipe(_ url: URL) -> [String] {
     catch { return errors + ["does not match the schema: \(error)"] }
     if recipe.schema != 1 { errors.append("schema must be 1") }
     if recipe.detect.required.isEmpty { errors.append("detect.required is empty") }
+    // the title names the app's folder and its Info.plist entries; the bundle id too
+    let t = recipe.title
+    if t.isEmpty || t.utf8.count > 64 || t.contains("/") || t.contains(":") || t.hasPrefix(".")
+        || t.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
+        errors.append("title must be 1-64 bytes, with no / or :, no control characters, not starting with a dot: \(t)")
+    }
+    if recipe.bundleId.range(of: "^[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$", options: .regularExpression) == nil {
+        errors.append("bundleId must be dot-separated letters, digits and dashes (com.example.game): \(recipe.bundleId)")
+    }
     for p in recipe.detect.required + [recipe.detect.fingerprint] where !isSafeRelative(p) {
         errors.append("not a relative path inside the game: \(p)")
     }
