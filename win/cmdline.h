@@ -1,8 +1,8 @@
 /* Append one argument to a Windows command line, quoted only when it needs it
  * (empty, or containing a space, tab or quote), with the escaping rules
  * CommandLineToArgvW and the C runtime use. Quoting every argument broke old
- * games that parse their command line themselves: Half-Life 1.1 took
- * "-game" "cstrike" for no options at all. Returns 0, or -1 if cap is too small.
+ * games that parse their command line themselves: one took "-game" "x" for no
+ * options at all. Returns 0, or -1 if cap is too small.
  * Plain C, so a native test can include it (tests/fixtures/cmdline-test.c). */
 #include <string.h>
 

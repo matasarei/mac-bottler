@@ -9,7 +9,7 @@
  * optionally only those whose title contains --title; a game started through a
  * launcher (a different process) is found the same way. A window of another
  * size is centred on the rect. Re-applied every 250 ms, because some games move
- * their window back (Thinker does after a movie). Exits when the window is gone
+ * their window back (some do after a movie). Exits when the window is gone
  * after having been seen, or if none appears within 3 minutes. A rect of size 0
  * (a full-screen game, which owns its window) starts the game and never moves it:
  * moving an OpenGL game's window turned its picture black.

@@ -21,10 +21,8 @@ LOG="$RES/logs/last-launch.log"
 
 PLAN="$("$KITCHEN" prepare-launch "$RES" "$VARIANT" "$DISPLAY_ID" 2>>"$LOG")" \
     || { echo "cannot prepare the launch, see $LOG" >&2; exit 2; }
-# sets GX GY GW GH REG_FILE GAME_EXE GAME_ARGS WIN_TITLE BACKDROP MENUBAR RECIPE_OVERRIDES, exports the recipe's env
+# sets GX GY GW GH GAME_EXE GAME_ARGS WIN_TITLE BACKDROP MENUBAR RECIPE_OVERRIDES, exports the recipe's env
 eval "$PLAN"
-# the recipe's per-launch registry values (bottler prepare-launch wrote them to drive C:)
-[ -n "$REG_FILE" ] && "$WINE" regedit /S "$REG_FILE" >>"$LOG" 2>&1
 
 # the menu bar and Dock as the player has them, put back however the game ends (a
 # snapshot a crashed run left behind is kept: it holds the real settings)

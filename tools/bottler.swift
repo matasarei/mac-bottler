@@ -110,7 +110,7 @@ struct PEFile {
     }
 
     /// Imported DLL names, or nil when the import table cannot be read (packed or
-    /// encrypted executables, such as the Half-Life engine DLLs).
+    /// encrypted executables, such as some games' engine DLLs).
     func importedDLLs() -> [String]? {
         guard dataDirectories.count > 1 else { return [] }
         let dir = dataDirectories[1]
@@ -787,7 +787,7 @@ struct Screen {
     var frame: CGRect
     var visible: CGRect
     var safeTop: CGFloat      // the notch; the menu bar is not counted (it auto-hides)
-    var modes: [CGSize] = []  // the display's modes in points (fullscreen picks one)
+    var modes: [CGSize] = []  // the display's modes in points (mode "game" picks one)
 }
 
 func connectedScreens() -> [Screen] {
@@ -804,14 +804,15 @@ func connectedScreens() -> [Screen] {
 /// the primary display, y down) for `screen`, where `primary` is NSScreen.screens[0].
 ///   mode "native": the whole usable area; "pillarbox:<w>:<h>": the largest area of
 ///   that aspect ratio, centred. Both sides are rounded down to a multiple of `align`.
-///   "fullscreen": the display's full width by the height below the notch, snapped
-///   to the tallest display mode that fits (1728x1080 on a 14" MacBook Pro): the size
-///   a game switching to full screen should ask for, so the scale stays the same.
+///   "game": the game places its own window (see prepareLaunch); the size is the
+///   display's full width by the height below the notch, snapped to the tallest
+///   display mode that fits (1728x1080 on a 14" MacBook Pro): the size a game going
+///   full screen should ask for, so the scale stays the same.
 /// Usable area: the display minus the notch and a visible Dock; the menu bar is
 /// ignored because the launcher auto-hides it while the game runs.
 func gameRect(screen: Screen, primary: Screen, mode: String, align: Int) throws -> (x: Int, y: Int, w: Int, h: Int) {
     let f = screen.frame, v = screen.visible
-    if mode == "fullscreen" {
+    if mode == "game" {
         let w = Int(f.width), limit = Int(f.height - screen.safeTop)
         let h = screen.modes.filter { Int($0.width) == w && Int($0.height) <= limit }.map { Int($0.height) }.max() ?? limit
         return (Int(f.minX - primary.frame.minX), Int(primary.frame.maxY - f.maxY), w, h)
@@ -833,7 +834,7 @@ func gameRect(screen: Screen, primary: Screen, mode: String, align: Int) throws 
             h = w * rh / rw / a * a
         }
     } else if mode != "native" {
-        throw PEError(message: "unknown mode \(mode) (native | fullscreen | pillarbox:<w>:<h>)")
+        throw PEError(message: "unknown mode \(mode) (native | game | pillarbox:<w>:<h>)")
     }
     // centre in the usable area, then flip to Win32 coordinates
     let cocoaX = area.minX + (area.width - CGFloat(w)) / 2
@@ -1046,7 +1047,7 @@ let recipeKeys: [String: Set<String>] = [
     "install.downloads[]": ["url", "sha256", "files"],
     "install.ini[]": ["file", "section", "set"],
     "install.proxy": ["dll"],
-    "launch": ["variants", "window", "ini", "registry", "env", "dllOverrides"],
+    "launch": ["variants", "window", "ini", "env", "dllOverrides"],
     "launch.variants[]": ["label", "exe", "args"],
     "launch.window": ["mode", "align", "backdrop", "menubar", "title"],
     "launch.ini[]": ["file", "section", "set"],
@@ -1073,9 +1074,8 @@ struct Recipe: Codable {
     struct Window: Codable {
         var mode: String; var align: Int?; var backdrop: Bool?; var menubar: String?; var title: String?
     }
-    struct RegistryEdit: Codable { var key: String; var set: [String: String] }
     struct Launch: Codable {
-        var variants: [Variant]; var window: Window; var ini: [IniEdit]?; var registry: [RegistryEdit]?
+        var variants: [Variant]; var window: Window; var ini: [IniEdit]?
         var env: [String: String]?; var dllOverrides: [String: String]?
     }
     var schema: Int; var title: String; var bundleId: String; var engine: String
@@ -1138,22 +1138,12 @@ func checkRecipe(_ url: URL) -> [String] {
     if recipe.launch.variants.isEmpty { errors.append("launch.variants is empty") }
     for v in recipe.launch.variants where !isSafeRelative(v.exe) { errors.append("variant exe is not relative: \(v.exe)") }
     let mode = recipe.launch.window.mode
-    if mode != "native" && mode != "fullscreen" {
+    if mode != "native" && mode != "game" {
         let p = mode.split(separator: ":")
         if !(p.count == 3 && p[0] == "pillarbox" && Int(p[1]) ?? 0 > 0 && Int(p[2]) ?? 0 > 0) {
-            errors.append("launch.window.mode must be native, fullscreen or pillarbox:<w>:<h>: \(mode)")
+            errors.append("launch.window.mode must be native, game or pillarbox:<w>:<h>: \(mode)")
         }
     }
-    for edit in recipe.launch.registry ?? [] {
-        if !(edit.key.hasPrefix("HKCU\\") || edit.key.hasPrefix("HKLM\\")) {
-            errors.append("launch.registry key must start with HKCU\\ or HKLM\\: \(edit.key)")
-        }
-        for (name, value) in edit.set where value.hasPrefix("dword:") && Int(value.dropFirst(6)) == nil
-            && !value.contains("{") {
-            errors.append("launch.registry \(name): dword:<decimal number or {w} {h} {x} {y}>, got \(value)")
-        }
-    }
-    if let m = recipe.launch.window.menubar, !["hide", "keep"].contains(m) { errors.append("launch.window.menubar must be hide or keep") }
     return errors
 }
 
@@ -1489,33 +1479,11 @@ func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
     for edit in recipe.launch.ini ?? [] {
         try iniSet(game.appendingPathComponent(edit.file), section: edit.section, edit.set.mapValues(geometry))
     }
-    // registry values for this launch, as one .reg file on drive C: that launch.sh imports
-    var regFile = ""
-    if let edits = recipe.launch.registry, !edits.isEmpty {
-        var reg = "REGEDIT4\r\n"
-        for edit in edits {
-            let key = edit.key.replacingOccurrences(of: "HKCU\\", with: "HKEY_CURRENT_USER\\")
-                .replacingOccurrences(of: "HKLM\\", with: "HKEY_LOCAL_MACHINE\\")
-            reg += "\r\n[\(key)]\r\n"
-            for (name, raw) in edit.set.sorted(by: { $0.key < $1.key }) {
-                let value = geometry(raw)
-                if value.hasPrefix("dword:"), let n = UInt32(value.dropFirst(6)) {
-                    reg += "\"\(name)\"=dword:" + String(format: "%08x", n) + "\r\n"
-                } else {
-                    let escaped = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-                    reg += "\"\(name)\"=\"\(escaped)\"\r\n"
-                }
-            }
-        }
-        try reg.write(to: res.appendingPathComponent("prefix/drive_c/bottler-launch.reg"), atomically: true, encoding: .utf8)
-        regFile = "C:\\bottler-launch.reg"
-    }
-    // fullscreen: the game owns its window, so bottler-place gets no rect and never moves it
-    let place = w.mode == "fullscreen" ? (x: 0, y: 0, w: 0, h: 0) : r
+    // "game": the game owns its window, so bottler-place gets no rect and never moves it
+    let place = w.mode == "game" ? (x: 0, y: 0, w: 0, h: 0) : r
     let overrides = (recipe.launch.dllOverrides ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
     var out = [
         "GX=\(place.x)", "GY=\(place.y)", "GW=\(place.w)", "GH=\(place.h)",
-        "REG_FILE=" + shq(regFile),
         "GAME_EXE=" + shq("C:\\Game\\" + v.exe.replacingOccurrences(of: "/", with: "\\")),
         "GAME_ARGS=(" + (v.args ?? []).map { shq(geometry($0)) }.joined(separator: " ") + ")",
         "WIN_TITLE=" + shq(w.title ?? ""),
