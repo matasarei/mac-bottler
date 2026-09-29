@@ -123,6 +123,17 @@ found on; the lesson is written so it applies to other games too.
   `secdrv.sys`, `drvmgt.dll`) even in digital releases; they are not needed and
   are excluded at install.
 
+## Focus
+
+- **A game started without the launcher window never became the active app**
+  (macOS 14 cooperative activation: an app cannot take the focus by itself; the
+  active app yields it). With nothing to choose, or autorun, the launcher shows no
+  window, so the game stayed behind the app that was active before: no black
+  backdrop (it only shows while the game is frontmost) and the game drawn over
+  other windows. The launcher now yields the focus to the game's Wine process
+  once it appears. A game started from a terminal (`launch.sh`) has the same
+  problem by nature: bring it to the front before judging its window.
+
 ## Audio
 
 - **44.1 kHz output devices can crackle** with old DirectSound games under Wine;
