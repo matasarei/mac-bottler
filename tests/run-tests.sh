@@ -567,6 +567,13 @@ CPU=$("$T/bottler" cpu "$F" 1 | python3 -c "import json,sys; d=json.load(sys.std
 kill $BUSY 2>/dev/null; wait $BUSY 2>/dev/null
 if [ "$CPU" -ge 70 ] && [ "$CPU" -le 130 ]; then ok; else bad "cpu reports a busy process near one core, got $CPU"; fi
 expect "cpu with nothing running is an empty list" "[" "$("$T/bottler" cpu "$F" 0.2 | head -c 1)"
+# an app under /tmp (a symlink to /private/tmp): the kernel reports processes under
+# /private/tmp, and the app's path must be resolved the same way to match them
+TF="$(mktemp -d /tmp/bottler-test.XXXXXX)/Fake.app"; mkdir -p "$TF/Contents/MacOS"
+cp "$F/Contents/MacOS/busy" "$TF/Contents/MacOS/busy"; "$TF/Contents/MacOS/busy" & BUSY=$!
+N=$("$T/bottler" cpu "$TF" 0.5 | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+kill $BUSY 2>/dev/null; wait $BUSY 2>/dev/null; rm -rf "$(dirname "$TF")"
+expect "an app under /tmp still finds its processes" "1" "$N"
 expect "a windowless app has no windows" "0" "$("$T/bottler" windows "$F" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")"
 "$T/bottler" log "$F" >/dev/null 2>&1; rc=$?; expect "log without a launch log exits 2" "2" "$rc"
 echo "line one" > "$F/Contents/Resources/logs/last-launch.log"

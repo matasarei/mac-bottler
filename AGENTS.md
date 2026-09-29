@@ -23,6 +23,7 @@ Read before changing anything:
 
 ```sh
 make check                                    # build prerequisites
+make bottler                                  # build/bottler: scan, hints, icon, observe
 make project NAME=<name> RECIPE=<recipe> GAME="<game folder>"
 make app PROJECT=<name>                       # ~1 min first time, ~15 s after
 make test                                     # hermetic tests + repo audit

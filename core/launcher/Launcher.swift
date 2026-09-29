@@ -127,6 +127,7 @@ final class Model: ObservableObject {
         w?.orderOut(nil)
         // out of the Dock while the game runs: the game is the one tile there
         NSApp.setActivationPolicy(.accessory)
+        focusGameWhenItAppears()
         runScript("launch.sh", [resources.path, String(variant), display], output: { _ in }, done: { [weak self] code, _ in
             guard let self else { return }
             self.busy = false; playing = false
@@ -136,6 +137,30 @@ final class Model: ObservableObject {
             if direct && code == 0 { NSApp.terminate(nil); return }
             showWindow(self)
         })
+    }
+}
+
+/// Hand the focus to the game once it shows up as an app (a Wine process run from
+/// this app's engine). Since macOS 14 an app cannot take the focus by itself: the
+/// active app yields it. Without this a game started without the launcher window
+/// (nothing to choose, or autorun) stayed behind the app that was active before:
+/// no black backdrop, and the game drawn over other windows.
+func focusGameWhenItAppears(deadline: Date = Date().addingTimeInterval(120)) {
+    let wine = resources.appendingPathComponent("wine").resolvingSymlinksInPath().path
+    let game = NSWorkspace.shared.runningApplications.first {
+        $0.activationPolicy == .regular && ($0.executableURL?.resolvingSymlinksInPath().path.hasPrefix(wine) ?? false)
+    }
+    guard let game else {
+        if playing && Date() < deadline {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { focusGameWhenItAppears(deadline: deadline) }
+        }
+        return
+    }
+    if #available(macOS 14.0, *) {
+        NSApp.yieldActivation(to: game)
+        game.activate()
+    } else {
+        game.activate(options: [])
     }
 }
 
