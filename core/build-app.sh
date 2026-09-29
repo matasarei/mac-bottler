@@ -116,6 +116,9 @@ if [ -d "$APP/Contents/Resources/prefix/drive_c/Game" ]; then
     mv "$APP/Contents/Resources/prefix/drive_c/Game" "$RES/prefix/drive_c/Game"
 fi
 if [ -f "$APP/Contents/Resources/launcher.conf" ]; then cp "$APP/Contents/Resources/launcher.conf" "$RES/"; fi
+# and its Wine registry for the user (HKCU): games keep settings there (video options)
+# that a fresh prefix from the cache would lose; recipe .reg files are imported on top
+if [ -f "$APP/Contents/Resources/prefix/user.reg" ]; then cp "$APP/Contents/Resources/prefix/user.reg" "$RES/prefix/user.reg"; fi
 bash "$RES/bin/install.sh" "$RES" "$GAME_SRC" | tee "$PROJ/logs/install.log"
 # .reg files the game ships (recipe install.registry), imported into this build's
 # fresh prefix: settings a game reads from the registry rather than from its folder
