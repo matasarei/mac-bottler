@@ -19,7 +19,7 @@ starting: most problems are already in there.
 - **Never rebuild an app while its game is running**: the rebuild copies the game
   folder (with the player's saves) into the new app and then replaces the old one;
   whatever the game saves after the copy is lost. Check first:
-  `pgrep -f "projects/<name>/.*Resources/wine"`.
+  `pgrep -f "<Title>.app/Contents/Resources/wine"` (matches the app wherever it is, `/Applications` included).
 - **Say before you take over the screen.** Every test launch opens the game on
   the player's display: say so and for how long, close it after, and leave a game
   the player is using alone.
