@@ -7,20 +7,18 @@
 #   make engine APP=<app> [ENGINE=<name>]   install a pinned Wine engine (engines/)
 #   make prefix APP=<app>        create the app's Wine prefix
 #   make helpers                 build the Windows helpers into build/win/
+#   make bottler                 build the bottler CLI into build/bottler (scan, icon, observe...)
 #   make test                    hermetic tests (synthetic PE files, no game data, no wine)
 #   make compile                 type-check the Swift sources
 #   make lint                    shellcheck the scripts (error level)
 #   make check-pins              every pinned download still exists with its SHA256
 #
-# Targets arrive with the plan's steps (engine, prefix, helpers, app, test,
-# compile, lint); until then they are not listed here.
-
 APP    ?= build/bottler-test.app
 ENGINE ?= crossover-23
 RES     = $(APP)/Contents/Resources
 DEPS    = build/deps
 
-.PHONY: help check project app engine prefix helpers test compile lint check-pins
+.PHONY: help check project app engine prefix helpers bottler test compile lint check-pins
 
 help:
 	@sed -n '1,/^$$/p' Makefile | sed 's/^# \{0,1\}//'
@@ -40,6 +38,11 @@ prefix: engine
 
 test:
 	@bash tests/run-tests.sh
+
+bottler:
+	@mkdir -p build
+	@swiftc -O -o build/bottler tools/bottler.swift
+	@echo "==> build/bottler"
 
 helpers:
 	@mkdir -p build/win

@@ -31,7 +31,7 @@ starting: most problems are already in there.
 
 ```sh
 make check
-swiftc -O -o build/bottler tools/bottler.swift
+make bottler                                 # build/bottler
 build/bottler scan "<game folder>" > /tmp/scan.json
 build/bottler hints "<game name>"            # what Lutris' installer scripts know
 ```

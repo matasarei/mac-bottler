@@ -1650,11 +1650,13 @@ func lutrisHints(_ name: String) -> String {
 /// The app bundle's resolved path with a trailing slash; every process of the app
 /// (launcher, wine, the game, helpers) runs an executable under it.
 func appRoot(_ path: String) throws -> String {
-    let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
-    guard FileManager.default.fileExists(atPath: url.appendingPathComponent("Contents").path) else {
+    // realpath, not resolvingSymlinksInPath: Foundation turns /private/tmp into /tmp,
+    // but the kernel reports process paths under /private/tmp, so they never matched
+    guard FileManager.default.fileExists(atPath: path + "/Contents"), let real = realpath(path, nil) else {
         throw PEError(message: "not an app bundle: \(path)")
     }
-    return url.path + "/"
+    defer { free(real) }
+    return String(cString: real) + "/"
 }
 
 struct WindowInfo {
