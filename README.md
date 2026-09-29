@@ -3,7 +3,7 @@
 [![CI](https://github.com/matasarei/mac-bottler/actions/workflows/ci.yml/badge.svg)](https://github.com/matasarei/mac-bottler/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/matasarei/mac-bottler)](LICENSE)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](#requirements)
-[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-black?logo=apple)](#requirements)
+[![Apple Silicon | Intel](https://img.shields.io/badge/Apple%20Silicon%20%7C%20Intel-black?logo=apple)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)](tools/bottler.swift)
 [![Wine](https://img.shields.io/badge/Wine-CrossOver%2023-8A1538?logo=wine&logoColor=white)](docs/THIRD-PARTY.md)
 
@@ -30,7 +30,9 @@ app) and turns it into a kitchen that bottles any game from a recipe.
 
 ## Requirements
 
-- macOS on Apple Silicon with Rosetta 2
+- macOS 14 or newer, on Apple Silicon (with Rosetta 2: the Wine engine is Intel
+  code) or on Intel. The tools and the launcher are compiled on your Mac, for its
+  own CPU and macOS. Tested so far on Apple Silicon only.
 - Xcode Command Line Tools: `xcode-select --install`
 - mingw-w64, for the small Windows-side helpers: `brew install mingw-w64`
 
