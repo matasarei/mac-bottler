@@ -379,6 +379,7 @@ cat > "$L/wine/bin/wine64" <<STUB
 #!/bin/bash
 echo "\$*" >> "$L/wine.calls"
 { echo "ARGS: \$*"; echo "CWD: \$PWD"; env | grep -E '^(WINEPREFIX|HOME|WINEDLLOVERRIDES|WINEMSYNC|GAME_MODE|DYLD_FALLBACK_LIBRARY_PATH)='; } > "$L/wine.log"
+sleep "\${STUB_SLEEP:-0}"
 exit "\${STUB_RC:-0}"
 STUB
 printf '#!/bin/bash\nexit 0\n' > "$L/wine/bin/wineserver"
@@ -416,6 +417,10 @@ expect "desktop: snapshot taken, menu bar hidden, frame started, snapshot restor
 rm -f "$L/calls"; STUB_RC=5 bash "$L/bin/launch.sh" "$L" 0 main; rc=$?
 expect "a failing game's exit code is passed on" "5" "$rc"
 expect "desktop restored even when the game fails" "desktop restore $STATE/desktop.json" "$(tail -1 "$L/calls")"
+# killed (Force Quit, logout): the menu bar and Dock still come back
+rm -f "$L/calls"; STUB_SLEEP=1 bash "$L/bin/launch.sh" "$L" 0 main & LP=$!
+sleep 0.4; kill -TERM $LP; wait $LP 2>/dev/null
+expect "desktop restored when the launch is killed (TERM)" "desktop restore $STATE/desktop.json" "$(tail -1 "$L/calls" 2>/dev/null)"
 expect "variant without args" "ARGS: $L/bin/bottler-place.exe 144 35 1440 1080 -- C:\\Game\\thinker.exe" "$(grep '^ARGS:' "$L/wine.log")"
 rm -f "$L/wine.log"; bash "$L/bin/launch.sh" "$L" 7 main 2>/dev/null; rc=$?
 if [ $rc -eq 2 ] && [ ! -e "$L/wine.log" ]; then ok; else bad "unknown variant: exit 2, wine not started (got $rc)"; fi
