@@ -38,7 +38,7 @@ are, when a task matches one, read its file and follow it** instead of improvisi
 
 | Skill | File | Use it to |
 |---|---|---|
-| cook | `.claude/skills/cook/SKILL.md` | bottle a game end to end: scan, recipe, build, launch, observe, fix |
+| cook | `.claude/skills/cook/SKILL.md` | bottle a game end to end, with or without a recipe: analyse the files, find or write the recipe, build, launch, observe, fix until it plays |
 | diagnose | `.claude/skills/diagnose/SKILL.md` | go from a symptom (black screen, no sound, crackle, high CPU, wrong Dock icon…) to its known causes and the test that confirms each |
 | improve-bottler | `.claude/skills/improve-bottler/SKILL.md` | fix or extend the shared code (`core/`, `tools/`, `win/`): branch, failing test first, fix, re-verify apps, pull request |
 

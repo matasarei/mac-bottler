@@ -67,16 +67,19 @@ so a rebuild takes seconds.
 ## With an agent
 
 Agents follow `AGENTS.md` (the rules and the skills; `CLAUDE.md` adds only what is
-specific to Claude Code). The **cook** skill runs the whole loop: it scans the game,
-picks or drafts a recipe, builds the app, launches and observes it, and fixes what
-it finds, asking you only about sound and feel. In Claude Code that is
+specific to Claude Code). The **cook** skill runs the whole loop: it analyses the
+game files, uses the game's recipe or writes one, builds the app, launches and
+observes it, and fixes what it finds, asking you only about sound and feel.
+
+**Your game needs no recipe in this repository.** Point the agent at the game
+folder: it works out the rest (the real exe, graphics, wrappers, store and
+copy-protection leftovers, what Lutris knows), writes the recipe, and refines it
+until the game plays. A recipe is only marked verified after you have played it. In Claude Code that is
 `/cook "/path/to/your/game folder"`; any other agent follows
 `.claude/skills/cook/SKILL.md`.
 
-No AI subscription? [OpenCode](https://opencode.ai) with an open model works too:
-the skills are plain markdown, and a local ~30B coding model (Qwen3 Coder 30B, for
-example) can follow them. [opencode-skills](https://github.com/matasarei/opencode-skills)
-is a ready set of OpenCode skills tuned for such local models.
+No AI subscription? [OpenCode](https://opencode.ai) with a local open model works
+too: the skills are plain markdown that most local coding models can follow.
 
 ## Layout
 
