@@ -164,6 +164,12 @@ found on; the lesson is written so it applies to other games too.
 
 ## Focus
 
+- **A game with voice chat waits for the microphone.** Counter-Strike opens it at
+  start; an app that does not declare `NSMicrophoneUsageDescription` gets no
+  permission prompt, and the game waited with a black window. From a terminal it
+  worked, because the terminal already had the permission. Every app declares it;
+  the player is asked once, and "Don't Allow" is fine (no voice chat).
+
 - **A game started without the launcher window never became the active app**
   (macOS 14 cooperative activation: an app cannot take the focus by itself; the
   active app yields it). With nothing to choose, or autorun, the launcher shows no

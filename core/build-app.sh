@@ -157,6 +157,7 @@ cat > "$NEW/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
+    <key>NSMicrophoneUsageDescription</key><string>$TITLE uses the microphone for in-game voice chat.</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
 </dict>
