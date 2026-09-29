@@ -76,10 +76,8 @@ until the game plays. A recipe is only marked verified after you have played it.
 `/cook "/path/to/your/game folder"`; any other agent follows
 `.claude/skills/cook/SKILL.md`.
 
-No AI subscription? [OpenCode](https://opencode.ai) with an open model works too:
-the skills are plain markdown, and a local ~30B coding model (Qwen3 Coder 30B, for
-example) can follow them. [opencode-skills](https://github.com/matasarei/opencode-skills)
-is a ready set of OpenCode skills tuned for such local models.
+No AI subscription? [OpenCode](https://opencode.ai) with a local open model works
+too: the skills are plain markdown that most local coding models can follow.
 
 ## Layout
 
