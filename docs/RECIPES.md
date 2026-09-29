@@ -13,7 +13,8 @@ after `recipes/`. For a one-off, it can also live in its project: `make project 
 GAME=…` copies the folder to `projects/<name>/recipe/` (git-ignored) and the
 project builds from it. `bottler recipe-check
 recipes/<game>/recipe.json` validates it; unknown keys are errors, so a typo fails
-the build instead of the game.
+the build instead of the game. Every path in a recipe is relative to the game folder:
+absolute paths and `..` are refused.
 
 ## Build time and install time
 
@@ -75,8 +76,8 @@ the build instead of the game.
 | Key | Meaning |
 |---|---|
 | `schema` | always `1` for now |
-| `title` | app and window name shown to the player |
-| `bundleId` | the app's bundle identifier |
+| `title` | app and window name shown to the player; 1–64 bytes, no `/` or `:`, no control characters, not starting with a dot (it names the app's folder); `&` and `<` are fine (escaped in Info.plist) |
+| `bundleId` | the app's bundle identifier: dot-separated letters, digits and dashes (`com.example.game`) |
 | `engine` | a file name in `engines/` without `.env` |
 | `detect.required` | paths that must exist in the chosen game folder |
 | `detect.fingerprint` | the file whose md5 identifies the build |

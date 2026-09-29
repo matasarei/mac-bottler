@@ -1115,6 +1115,15 @@ func checkRecipe(_ url: URL) -> [String] {
     catch { return errors + ["does not match the schema: \(error)"] }
     if recipe.schema != 1 { errors.append("schema must be 1") }
     if recipe.detect.required.isEmpty { errors.append("detect.required is empty") }
+    // the title names the app's folder and its Info.plist entries; the bundle id too
+    let t = recipe.title
+    if t.isEmpty || t.utf8.count > 64 || t.contains("/") || t.contains(":") || t.hasPrefix(".")
+        || t.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
+        errors.append("title must be 1-64 bytes, with no / or :, no control characters, not starting with a dot: \(t)")
+    }
+    if recipe.bundleId.range(of: "^[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$", options: .regularExpression) == nil {
+        errors.append("bundleId must be dot-separated letters, digits and dashes (com.example.game): \(recipe.bundleId)")
+    }
     for p in recipe.detect.required + [recipe.detect.fingerprint] where !isSafeRelative(p) {
         errors.append("not a relative path inside the game: \(p)")
     }
@@ -1133,6 +1142,14 @@ func checkRecipe(_ url: URL) -> [String] {
     for (from, to) in recipe.install?.rename ?? [:] where !isSafeRelative(from) || !isSafeRelative(to) {
         errors.append("rename entry is not relative: \(from) -> \(to)")
     }
+    // files an install or a launch writes (INI edits, the exe icon) or reads, inside the game
+    // (built step by step: one long + expression timed out in CI's older Swift type-checker)
+    var inGame: [(field: String, path: String)] = []
+    for edit in recipe.install?.ini ?? [] { inGame.append(("install.ini file", edit.file)) }
+    for edit in recipe.launch.ini ?? [] { inGame.append(("launch.ini file", edit.file)) }
+    for reg in recipe.install?.registry ?? [] { inGame.append(("install.registry", reg)) }
+    for exe in [recipe.install?.appIcon, recipe.install?.exeIcon].compactMap({ $0 }) { inGame.append(("install icon exe", exe)) }
+    for (field, p) in inGame where !isSafeRelative(p) { errors.append("\(field) is not inside the game folder: \(p)") }
     if let p = recipe.install?.proxy {
         if !p.dll.lowercased().hasSuffix(".dll") || !isSafeRelative(p.dll) { errors.append("proxy dll must be a .dll inside the game: \(p.dll)") }
     }
