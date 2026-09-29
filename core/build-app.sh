@@ -113,9 +113,12 @@ cp core/install.sh core/launch.sh core/wine-env.sh "$RES/bin/"
 swiftc -O -parse-as-library -o "$NEW/Contents/MacOS/launcher" core/launcher/Launcher.swift core/launcher/Decision.swift
 
 echo "==> game"
-# a rebuild keeps the game folder of the app it replaces (saves, settings)
+# a rebuild keeps the game folder of the app it replaces (saves, settings). Cloned,
+# never moved: if a later step fails, the old app still has everything, and the next
+# build (which starts by deleting the half-built app) cannot take the saves with it.
 if [ -d "$APP/Contents/Resources/prefix/drive_c/Game" ]; then
-    mv "$APP/Contents/Resources/prefix/drive_c/Game" "$RES/prefix/drive_c/Game"
+    cp -cR "$APP/Contents/Resources/prefix/drive_c/Game" "$RES/prefix/drive_c/Game" 2>/dev/null \
+        || { rm -rf "$RES/prefix/drive_c/Game"; cp -R "$APP/Contents/Resources/prefix/drive_c/Game" "$RES/prefix/drive_c/Game"; }
 fi
 if [ -f "$APP/Contents/Resources/launcher.conf" ]; then cp "$APP/Contents/Resources/launcher.conf" "$RES/"; fi
 # and its Wine registry for the user (HKCU): games keep settings there (video options)
@@ -173,7 +176,7 @@ codesign --force --deep --sign - "$NEW" 2>&1 | grep -v "replacing existing signa
 
 # swap in the new app
 if [ -d "$APP" ]; then mv "$APP" "$WORK/previous.app.$$"; fi
-mv "$NEW" "$APP"
+mv "$NEW" "$APP" || { [ -d "$WORK/previous.app.$$" ] && mv "$WORK/previous.app.$$" "$APP"; exit 1; }   # put the old one back
 rm -rf "$WORK/previous.app.$$"
 touch "$APP"   # Finder and the Dock pick up the new icon
 echo "==> done: $APP"

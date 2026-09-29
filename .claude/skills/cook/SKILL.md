@@ -16,8 +16,9 @@ starting: most problems are already in there.
 - **The game folder is read only.** Never write, rename or delete anything in it.
 - **Nothing from the game is ever committed**: no files, no icons, no export
   lists, no keys. `make test` refuses them; don't work around it.
-- **Never rebuild an app while its game is running**: the rebuild moves the game
-  folder (with the player's saves) into the new app. Check first:
+- **Never rebuild an app while its game is running**: the rebuild copies the game
+  folder (with the player's saves) into the new app and then replaces the old one;
+  whatever the game saves after the copy is lost. Check first:
   `pgrep -f "projects/<name>/.*Resources/wine"`.
 - **Say before you take over the screen.** Every test launch opens the game on
   the player's display: say so and for how long, close it after, and leave a game
