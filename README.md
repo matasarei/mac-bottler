@@ -4,8 +4,9 @@ Build a native-feeling macOS app for a Windows game, on your own Mac, from a sma
 per-game **recipe**. Each app is self-contained: a pinned Wine runtime, its own
 prefix, the game installed from **your own copy**, and a tiny launcher (game
 variant, display, Play). With nothing to choose (one variant, one display) there
-is no launcher window: the app starts the game and quits with it; hold ⌥ Option
-while opening it to see the window anyway. Resolution, aspect ratio, borders and
+is no launcher window: the app starts the game and quits with it. For a game with
+a choice, tick "Start … right away next time" to get the same; hold ⌥ Option while
+opening the app to see the window anyway. Resolution, aspect ratio, borders and
 sound are detected at every launch.
 
 No game files and no game artwork are ever part of this repository or of a built

@@ -108,7 +108,7 @@ echo "==> helpers and launcher"
 cp "$BOTTLER" "$RES/bin/bottler"
 i686-w64-mingw32-gcc -O2 -mwindows -o "$RES/bin/bottler-place.exe" win/place.c
 cp core/install.sh core/launch.sh core/wine-env.sh "$RES/bin/"
-swiftc -O -parse-as-library -o "$NEW/Contents/MacOS/launcher" core/launcher/Launcher.swift
+swiftc -O -parse-as-library -o "$NEW/Contents/MacOS/launcher" core/launcher/Launcher.swift core/launcher/Decision.swift
 
 echo "==> game"
 # a rebuild keeps the game folder of the app it replaces (saves, settings)
