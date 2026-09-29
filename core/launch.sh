@@ -21,7 +21,7 @@ LOG="$RES/logs/last-launch.log"
 
 PLAN="$("$KITCHEN" prepare-launch "$RES" "$VARIANT" "$DISPLAY_ID" 2>>"$LOG")" \
     || { echo "cannot prepare the launch, see $LOG" >&2; exit 2; }
-# sets GX GY GW GH GAME_EXE GAME_ARGS WIN_TITLE BACKDROP MENUBAR RECIPE_OVERRIDES, exports the recipe's env
+# sets GX GY GW GH INJECT GAME_EXE GAME_ARGS WIN_TITLE BACKDROP MENUBAR RECIPE_OVERRIDES, exports the recipe's env
 eval "$PLAN"
 
 # the menu bar and Dock as the player has them, put back however the game ends (a
@@ -43,6 +43,7 @@ fi
 
 TITLE_ARGS=()
 [ -n "$WIN_TITLE" ] && TITLE_ARGS=(--title "$WIN_TITLE")
+[ -n "$INJECT" ] && TITLE_ARGS+=(--inject "$INJECT")
 # the physical folder, which Wine sees as C:\Game: launchers start the game relative
 # to it, and a path through Resources/game would reach Wine as a Z:\ path
 cd "$RES/prefix/drive_c/Game" || exit 2

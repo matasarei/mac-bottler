@@ -1,6 +1,6 @@
 /* bottler-place: start a game and keep its window at a target rect.
  *
- *   bottler-place.exe <x> <y> <w> <h> [--title <text>] -- <exe> [args...]
+ *   bottler-place.exe <x> <y> <w> <h> [--title <text>] [--inject <dll>] -- <exe> [args...]
  *
  * Runs inside the game's Wine session, where one Windows program may move
  * another's window without any macOS permission. The rect comes from
@@ -12,7 +12,10 @@
  * their window back (some do after a movie). Exits when the window is gone
  * after having been seen, or if none appears within 3 minutes. A rect of size 0
  * (a full-screen game, which owns its window) starts the game and never moves it:
- * moving an OpenGL game's window turned its picture black.
+ * moving an OpenGL game's window turned its picture black. --inject loads a DLL
+ * into the game before it runs (the game starts suspended; the DLL is loaded by a
+ * thread created in it); if that fails the game still runs, and the reason goes
+ * to stderr (the launch log).
  *
  * Build: i686-w64-mingw32-gcc -O2 -mwindows -o bottler-place.exe place.c
  */
@@ -53,13 +56,33 @@ static void place(HWND hwnd, int x, int y, int w, int h)
         SetWindowPos(hwnd, NULL, tx, ty, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+/* Load `dll` into a (suspended) process: its path is written into the process and
+ * LoadLibraryA runs there in a new thread. Kernel32 is at the same address in every
+ * process of a session, so this process's LoadLibraryA is the game's too. */
+static void load_into(HANDLE process, const char *dll)
+{
+    SIZE_T n = strlen(dll) + 1;
+    LPVOID mem = VirtualAllocEx(process, NULL, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    LPTHREAD_START_ROUTINE load =
+        (LPTHREAD_START_ROUTINE)(void (*)(void))GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryA");
+    HANDLE t = mem && WriteProcessMemory(process, mem, dll, n, NULL) && load
+        ? CreateRemoteThread(process, NULL, 0, load, mem, 0, NULL) : NULL;
+    DWORD loaded = 0;
+    if (t && WaitForSingleObject(t, 15000) == WAIT_OBJECT_0) GetExitCodeThread(t, &loaded);
+    if (!loaded) fprintf(stderr, "bottler-place: could not load %s into the game (error %lu); it runs without it\n", dll, GetLastError());
+    else fprintf(stderr, "bottler-place: loaded %s into the game\n", dll);
+    if (t) CloseHandle(t);
+    if (mem) VirtualFreeEx(process, mem, 0, MEM_RELEASE);
+}
+
 int main(int argc, char **argv)
 {
     int i, sep = -1;
-    const char *title = NULL;
+    const char *title = NULL, *inject = NULL;
     for (i = 5; i < argc; i++) {
         if (!strcmp(argv[i], "--")) { sep = i; break; }
         if (!strcmp(argv[i], "--title") && i + 1 < argc) title = argv[++i];
+        else if (!strcmp(argv[i], "--inject") && i + 1 < argc) inject = argv[++i];
     }
     if (argc < 7 || sep < 0 || sep + 1 >= argc) {
         fprintf(stderr, "usage: bottler-place.exe <x> <y> <w> <h> [--title <text>] -- <exe> [args...]\n");
@@ -73,9 +96,13 @@ int main(int argc, char **argv)
         if (append_arg(cmd, sizeof(cmd), argv[i])) return 2;
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
-    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, inject ? CREATE_SUSPENDED : 0, NULL, NULL, &si, &pi)) {
         fprintf(stderr, "bottler-place: cannot start %s (error %lu)\n", argv[sep + 1], GetLastError());
         return 1;
+    }
+    if (inject) {
+        load_into(pi.hProcess, inject);
+        ResumeThread(pi.hThread);
     }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);

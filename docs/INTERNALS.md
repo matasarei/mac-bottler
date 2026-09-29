@@ -79,6 +79,18 @@ found on; the lesson is written so it applies to other games too.
 
 ## Launching
 
+- **Old games can enumerate the display modes quadratically.** Counter-Strike
+  walked the mode list ~400 times at start (~158,000 EnumDisplaySettings calls);
+  a Retina Mac reports ~400 modes through Wine (every resolution at several
+  refresh rates, in 8/16/32-bit) and each call costs ~50 us: ~15 s before the
+  menu. `launch.modeCache` loads `bottler-modecache.dll` into the game
+  (`bottler-place --inject`: the game starts suspended, the DLL is loaded by a
+  thread created in it); it re-points user32's exported EnumDisplaySettings(Ex)A/W
+  at cached versions, so the engine DLL loaded later gets them too. Current and
+  registry settings are never cached; ChangeDisplaySettings clears the cache.
+  Wine's `AppInit_DLLs` would have been simpler, but this Wine does not load them.
+  The Wine 11 engine was no way out: it crashed this game at start.
+
 - **Old games parse their own command line.** `bottler-place` quoted every
   argument (`"-game" "cstrike"`), and Half-Life 1.1 then saw no options at all: it
   started Half-Life instead of Counter-Strike, full screen and black. Arguments

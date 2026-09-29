@@ -107,6 +107,8 @@ fi
 echo "==> helpers and launcher"
 cp "$BOTTLER" "$RES/bin/bottler"
 i686-w64-mingw32-gcc -O2 -mwindows -o "$RES/bin/bottler-place.exe" win/place.c
+mkdir -p "$RES/prefix/drive_c/bottler"   # C:\bottler: helpers loaded into the game (launch.modeCache)
+i686-w64-mingw32-gcc -O2 -shared -o "$RES/prefix/drive_c/bottler/bottler-modecache.dll" win/modecache.c
 cp core/install.sh core/launch.sh core/wine-env.sh "$RES/bin/"
 swiftc -O -parse-as-library -o "$NEW/Contents/MacOS/launcher" core/launcher/Launcher.swift core/launcher/Decision.swift
 
