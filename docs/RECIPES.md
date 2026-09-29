@@ -97,6 +97,7 @@ the build instead of the game.
 | `launch.window.menubar` | `hide` (auto-hide while playing) or `keep` |
 | `launch.window.title` | text the game window's title contains, when the largest window is not the game's |
 | `launch.ini` | INI edits applied at every launch; `{w}`, `{h}`, `{x}`, `{y}` are the window's geometry |
+| `launch.modeCache` | `true`: load the display-mode cache into the game (`win/modecache.c`). For games that enumerate the display modes over and over at start: ~400 modes on a Retina Mac made Counter-Strike's menu take ~18 s; with the cache, ~4.5 s |
 | `launch.env` | extra environment variables for wine |
 | `launch.dllOverrides` | `WINEDLLOVERRIDES` entries, e.g. `{"ddraw": "n,b"}` |
 

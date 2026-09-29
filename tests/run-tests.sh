@@ -238,6 +238,10 @@ pe "$X/x64.dll" --64 --imports KERNEL32.dll
 win/proxy.sh def "$X/x64.dll" >/dev/null 2>&1; rc=$?
 expect "64-bit DLLs are refused" "1" "$rc"
 if i686-w64-mingw32-gcc -O2 -mwindows -o "$X/bottler-place.exe" win/place.c 2>/dev/null; then ok; else bad "place.c builds"; fi
+# the display-mode cache's lookup table (win/modecache_store.h), natively
+if cc -o "$X/modecache-test" tests/fixtures/modecache-test.c 2>"$X/modecache.err" && "$X/modecache-test" > "$X/modecache.out"; then ok; \
+else bad "modecache store: $(cat "$X/modecache.err" "$X/modecache.out" 2>/dev/null | head -5)"; fi
+if i686-w64-mingw32-gcc -O2 -shared -o "$X/bottler-modecache.dll" win/modecache.c 2>"$X/modecache-dll.err"; then ok; else bad "modecache.c builds: $(head -3 "$X/modecache-dll.err")"; fi
 # the game's command line: quoted only where needed (old games parse it themselves)
 cc -o "$X/cmdline-test" tests/fixtures/cmdline-test.c
 expect "plain args are not quoted" 'C:\Game\hl.exe -game cstrike -windowed' "$("$X/cmdline-test" 'C:\Game\hl.exe' -game cstrike -windowed)"
@@ -431,6 +435,16 @@ rm -f "$L/wine.calls"; bash "$L/bin/launch.sh" "$L" 1 main; rc=$?
 expect "mode game: bottler-place gets no rect, the args get the display below the notch" \
     "ARGS: $L/bin/bottler-place.exe 0 0 0 0 -- C:\\Game\\bin\\thinker.exe -smac two words -w 1728 -h 1085" \
     "$(grep '^ARGS:' "$L/wine.log")"
+# launch.modeCache: bottler-place loads the display-mode cache into the game
+python3 - "$L/recipe/recipe.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["launch"]["modeCache"] = True; json.dump(d, open(sys.argv[1], "w"))
+PY
+if "$T/bottler" recipe-check "$L/recipe/recipe.json" >/dev/null; then ok; else bad "launch.modeCache passes recipe-check"; fi
+bash "$L/bin/launch.sh" "$L" 1 main
+expect "modeCache: bottler-place injects the cache DLL into the game" \
+    "ARGS: $L/bin/bottler-place.exe 0 0 0 0 --inject C:\\bottler\\bottler-modecache.dll -- C:\\Game\\bin\\thinker.exe -smac two words -w 1728 -h 1085" \
+    "$(grep '^ARGS:' "$L/wine.log")"
 unset BOTTLER_TEST_SCREENS
 
 # --- projects: make project, and two projects built at the same time (no engine)
@@ -458,6 +472,7 @@ for n in one two; do
     if [ -s "$B/Contents/Resources/AppIcon.icns" ]; then ok; else bad "$n: AppIcon.icns in Resources"; fi
     if [ -f "$B/Contents/Resources/prefix/drive_c/Game/Game.exe" ] && [ -e "$B/Contents/Resources/game/Game.exe" ]; then ok; else bad "$n: game installed at build time"; fi
     if file "$B/Contents/MacOS/launcher" 2>/dev/null | grep -q "Mach-O 64-bit executable"; then ok; else bad "$n: launcher built"; fi
+    if [ -s "$B/Contents/Resources/prefix/drive_c/bottler/bottler-modecache.dll" ]; then ok; else bad "$n: the display-mode cache DLL is in the prefix (C:\\bottler)"; fi
     for f in bottler bottler-place.exe install.sh launch.sh wine-env.sh; do
         if [ -s "$B/Contents/Resources/bin/$f" ]; then ok; else bad "$n: bundle has bin/$f"; fi
     done

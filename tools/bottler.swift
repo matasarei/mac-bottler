@@ -1047,7 +1047,7 @@ let recipeKeys: [String: Set<String>] = [
     "install.downloads[]": ["url", "sha256", "files"],
     "install.ini[]": ["file", "section", "set"],
     "install.proxy": ["dll"],
-    "launch": ["variants", "window", "ini", "env", "dllOverrides"],
+    "launch": ["variants", "window", "ini", "env", "dllOverrides", "modeCache"],
     "launch.variants[]": ["label", "exe", "args"],
     "launch.window": ["mode", "align", "backdrop", "menubar", "title"],
     "launch.ini[]": ["file", "section", "set"],
@@ -1077,6 +1077,7 @@ struct Recipe: Codable {
     struct Launch: Codable {
         var variants: [Variant]; var window: Window; var ini: [IniEdit]?
         var env: [String: String]?; var dllOverrides: [String: String]?
+        var modeCache: Bool?
     }
     var schema: Int; var title: String; var bundleId: String; var engine: String
     var detect: Detect; var install: Install?; var launch: Launch
@@ -1487,6 +1488,8 @@ func prepareLaunch(res: URL, variant: Int, display: String) throws -> String {
         "GAME_EXE=" + shq("C:\\Game\\" + v.exe.replacingOccurrences(of: "/", with: "\\")),
         "GAME_ARGS=(" + (v.args ?? []).map { shq(geometry($0)) }.joined(separator: " ") + ")",
         "WIN_TITLE=" + shq(w.title ?? ""),
+        // the display-mode cache (win/modecache.c), built into every app's prefix
+        "INJECT=" + shq((recipe.launch.modeCache ?? false) ? "C:\\bottler\\bottler-modecache.dll" : ""),
         "BACKDROP=" + ((w.backdrop ?? false) ? "1" : "0"),
         "MENUBAR=" + shq(w.menubar ?? "keep"),
         "RECIPE_OVERRIDES=" + shq(overrides.joined(separator: ";")),
@@ -1856,7 +1859,9 @@ case "shot":
                         .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
                     fail("bottler shot: the app has no window on screen")
                 }
-                captureArgs += ["-R\(Int(w.frame.minX)),\(Int(w.frame.minY)),\(Int(w.frame.width)),\(Int(w.frame.height))"]
+                // the window itself, not the screen area it covers: another app on top
+                // would otherwise be judged as the game's picture
+                captureArgs += ["-o", "-l", String(w.number)]
             default: fail("bottler shot: unknown option \(args[3])")
             }
         }
