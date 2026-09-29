@@ -34,7 +34,9 @@ app) and turns it into a kitchen that bottles any game from a recipe.
   code) or on Intel. The tools and the launcher are compiled on your Mac, for its
   own CPU and macOS. Tested so far on Apple Silicon only.
 - Xcode Command Line Tools: `xcode-select --install`
-- mingw-w64, for the small Windows-side helpers: `brew install mingw-w64`
+- mingw-w64, for the small Windows-side helpers, and 7-Zip, to unpack the Wine
+  engine: `brew install mingw-w64 sevenzip`. The engine itself is downloaded and
+  checksum-verified by the first build (~220 MB, cached; Wineskin is not needed).
 
 ```sh
 make check

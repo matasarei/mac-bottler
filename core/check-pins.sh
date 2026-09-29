@@ -18,6 +18,11 @@ for env in engines/*.env; do
     # shellcheck source=/dev/null
     sha="$(. "$env"; echo "$ENGINE_SHA256")"
     case "$url" in https://*) check "$env" "$url" "$sha" ;; *) echo "skip: $env (local)" ;; esac
+    # shellcheck source=/dev/null
+    wurl="$(. "$env"; echo "${ENGINE_WRAPPER_URL:-}")"
+    # shellcheck source=/dev/null
+    wsha="$(. "$env"; echo "${ENGINE_WRAPPER_SHA256:-}")"
+    [ -n "$wurl" ] && check "$env (wrapper)" "$wurl" "$wsha"
 done
 for r in recipes/*/recipe.json; do
     python3 -c 'import json,sys

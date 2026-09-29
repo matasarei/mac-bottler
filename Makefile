@@ -29,6 +29,7 @@ check:
 	@command -v swiftc >/dev/null || { echo "ERROR: swiftc not found: install the Xcode Command Line Tools (xcode-select --install)"; exit 1; }
 	@command -v curl >/dev/null || { echo "ERROR: curl not found"; exit 1; }
 	@command -v i686-w64-mingw32-gcc >/dev/null || { echo "ERROR: i686-w64-mingw32-gcc not found: brew install mingw-w64 (builds the small Windows helpers)"; exit 1; }
+	@command -v 7zz >/dev/null || { echo "ERROR: 7zz not found: brew install sevenzip (unpacks the Wine engine)"; exit 1; }
 	@echo "==> prerequisites OK"
 
 engine:

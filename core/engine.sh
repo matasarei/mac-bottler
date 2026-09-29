@@ -29,21 +29,42 @@ tar.xz)
     ;;
 wineskin)
     command -v 7zz >/dev/null || { echo "ERROR: 7zz not found: brew install sevenzip"; exit 1; }
-    ARCHIVE="${ENGINE_URL#file://}"
-    [ -f "$ARCHIVE" ] || { echo "ERROR: engine archive not found: $ARCHIVE (install it with Wineskin Winery)"; exit 1; }
-    echo "$ENGINE_SHA256  $ARCHIVE" | shasum -a 256 -c - >/dev/null \
-        || { echo "ERROR: $NAME archive checksum mismatch: $ARCHIVE"; exit 1; }
-    [ -d "$ENGINE_FRAMEWORKS" ] || { echo "ERROR: Wineskin wrapper frameworks not found: $ENGINE_FRAMEWORKS"; exit 1; }
-    [ "$("$(dirname "$0")/tree-sha.sh" "$ENGINE_FRAMEWORKS")" = "$ENGINE_FRAMEWORKS_SHA256" ] \
-        || { echo "ERROR: $NAME frameworks checksum mismatch: $ENGINE_FRAMEWORKS"; exit 1; }
+    # fetch <url> <sha256> <local copy or ""> -> path of the verified archive in the cache
+    fetch() {
+        local file; file="$CACHE/$(basename "$1")"
+        if [ ! -f "$file" ] && [ -n "$3" ] && [ -f "$3" ] \
+           && echo "$2  $3" | shasum -a 256 -c - >/dev/null 2>&1; then
+            cp -c "$3" "$file.part" 2>/dev/null || cp "$3" "$file.part"   # a local Wineskin install
+            mv "$file.part" "$file"
+        fi
+        if [ ! -f "$file" ]; then
+            echo "==> downloading $(basename "$1")" >&2
+            curl -fL --progress-bar -o "$file.part" "$1" && mv "$file.part" "$file"
+        fi
+        echo "$2  $file" | shasum -a 256 -c - >/dev/null \
+            || { echo "ERROR: checksum mismatch: delete $file and retry" >&2; return 1; }
+        echo "$file"
+    }
+    ARCHIVE="$(fetch "$ENGINE_URL" "$ENGINE_SHA256" "${ENGINE_LOCAL:-}")"
+    TMP="$CACHE/$NAME.unpack"; rm -rf "$TMP"; mkdir -p "$TMP/engine" "$TMP/wrapper"
     echo "==> unpacking engine $NAME"
-    TMP="$CACHE/$NAME.unpack"; rm -rf "$TMP"; mkdir -p "$TMP"
-    7zz x -y -o"$TMP" "$ARCHIVE" >/dev/null
-    tar -xf "$TMP"/*.tar --strip-components 1 -C "$RES/wine"
-    rm -rf "$TMP"
+    7zz x -y -o"$TMP/engine" "$ARCHIVE" >/dev/null
+    tar -xf "$TMP"/engine/*.tar --strip-components 1 -C "$RES/wine"
+    # the wrapper's frameworks: from a local Wineskin install with the same tree, else the download
+    FRAMEWORKS="${ENGINE_FRAMEWORKS_LOCAL:-}"
+    if [ -z "$FRAMEWORKS" ] || [ ! -d "$FRAMEWORKS" ] \
+       || [ "$("$(dirname "$0")/tree-sha.sh" "$FRAMEWORKS")" != "$ENGINE_FRAMEWORKS_SHA256" ]; then
+        WRAPPER="$(fetch "$ENGINE_WRAPPER_URL" "$ENGINE_WRAPPER_SHA256" "")"
+        7zz x -y -o"$TMP/wrapper" "$WRAPPER" >/dev/null
+        tar -xf "$TMP"/wrapper/*.tar -C "$TMP/wrapper" "$ENGINE_FRAMEWORKS"
+        FRAMEWORKS="$TMP/wrapper/$ENGINE_FRAMEWORKS"
+    fi
+    [ "$("$(dirname "$0")/tree-sha.sh" "$FRAMEWORKS")" = "$ENGINE_FRAMEWORKS_SHA256" ] \
+        || { echo "ERROR: $NAME frameworks checksum mismatch: $FRAMEWORKS"; exit 1; }
     # the engine loads these by name, from the same place as the other engines' (core/wine-env.sh)
     mkdir -p "$RES/wine/lib/external"
-    ditto "$ENGINE_FRAMEWORKS" "$RES/wine/lib/external"
+    ditto "$FRAMEWORKS" "$RES/wine/lib/external"
+    rm -rf "$TMP"
     ;;
 *)
     echo "ERROR: engine kind '$ENGINE_KIND' ($NAME) is not supported"; exit 1 ;;
