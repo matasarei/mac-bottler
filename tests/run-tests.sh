@@ -554,6 +554,10 @@ if [ "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['recipe'
 printf 'Windows Registry Editor Version 5.00\r\n' > "$GL/settings.reg"
 if core/build-app.sh "$BOTTLER_PROJECTS/priv" --no-engine > "$T/build-priv.log" 2>&1 && [ -d "$BOTTLER_PROJECTS/priv/Local Test.app" ]; then ok; else bad "a project builds from a recipes.local recipe"; fi
 if git check-ignore -q recipes.local/x/recipe.json; then ok; else bad "recipes.local/ is git-ignored"; fi
+# local agent state is ignored by the repository itself, not only by a global gitignore
+for local_file in .claude/repo-profile.json .claude/settings.local.json .tasks/x.md .gku/x; do
+    if git -c core.excludesFile=/dev/null check-ignore -q "$local_file"; then ok; else bad "the repository's .gitignore ignores $local_file"; fi
+done
 unset BOTTLER_LOCAL_RECIPES
 # a title with XML characters still makes a valid Info.plist (they are escaped)
 AMP="$T/amp-recipe"; cp -R tests/fixtures/recipe-min "$AMP"

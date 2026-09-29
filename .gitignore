@@ -7,5 +7,6 @@ recipes.local/
 
 # local agent/task state; the shared skills in .claude/skills/ are committed
 .claude/settings.local.json
+.claude/repo-profile.json
 .tasks/
 .gku/
