@@ -332,6 +332,23 @@ expect "unknown build with unknown=refuse exits 3" "3" "$rc"
 write_recipe verified ', "tittle": "typo"'
 MSG=$("$T/bottler" recipe-check "$R/recipe/recipe.json" 2>&1); rc=$?
 if [ $rc -eq 2 ] && echo "$MSG" | grep -q 'unknown key "tittle"'; then ok; else bad "typo'd key is rejected by name"; fi
+# recipe values that become paths, XML or write targets are checked (audit 2026-09-29)
+RC="$T/recipe-checks"; mkdir -p "$RC"
+variant() {  # variant <name> <python applied to d> : a recipe-min variant, checked
+    python3 - "tests/fixtures/recipe-min/recipe.json" "$RC/$1.json" "$2" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); exec(sys.argv[3]); json.dump(d, open(sys.argv[2], "w"))
+PY
+    "$T/bottler" recipe-check "$RC/$1.json" >/dev/null 2>&1
+}
+for bad_case in 'd["title"]="a/b"' 'd["title"]="../x"' 'd["title"]=".hidden"' 'd["title"]="bell\x07"' 'd["title"]="x"*65' 'd["title"]=""' \
+                'd["bundleId"]="com.example test"' 'd["bundleId"]="com.example;rm"' 'd["bundleId"]=""' \
+                'd["install"]["ini"]=[{"file":"../x.ini","section":"s","set":{"k":"v"}}]' \
+                'd["launch"]["ini"]=[{"file":"a/../../x.ini","section":"s","set":{"k":"v"}}]' \
+                'd["install"]["registry"]=["../x.reg"]' 'd["install"]["appIcon"]="/etc/x.exe"' 'd["install"]["exeIcon"]="../Game.exe"'; do
+    if ! variant bad "$bad_case"; then ok; else bad "recipe-check refuses: $bad_case"; fi
+done
+if variant amp 'd["title"]="A & B <1>"'; then ok; else bad "a title with & and < is a valid title"; fi
 write_recipe verified
 printf 'LIBRARY sound.dll\nEXPORTS\n  "other" = sound_orig."other" @1\n' > "$R/recipe/sound.def"
 "$T/bottler" install "$R/recipe" "$SRC" "$R/game-baddef" "$R/icons4" >/dev/null 2>&1; rc=$?
@@ -538,6 +555,17 @@ printf 'Windows Registry Editor Version 5.00\r\n' > "$GL/settings.reg"
 if core/build-app.sh "$BOTTLER_PROJECTS/priv" --no-engine > "$T/build-priv.log" 2>&1 && [ -d "$BOTTLER_PROJECTS/priv/Local Test.app" ]; then ok; else bad "a project builds from a recipes.local recipe"; fi
 if git check-ignore -q recipes.local/x/recipe.json; then ok; else bad "recipes.local/ is git-ignored"; fi
 unset BOTTLER_LOCAL_RECIPES
+# a title with XML characters still makes a valid Info.plist (they are escaped)
+AMP="$T/amp-recipe"; cp -R tests/fixtures/recipe-min "$AMP"
+python3 - "$AMP/recipe.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["title"] = "A & B <1>"; json.dump(d, open(sys.argv[1], "w"))
+PY
+core/project.sh amp "$AMP" "$GA" >/dev/null
+core/build-app.sh "$BOTTLER_PROJECTS/amp" --no-engine > "$T/build-amp.log" 2>&1
+if plutil -lint "$BOTTLER_PROJECTS/amp/A & B <1>.app/Contents/Info.plist" >/dev/null 2>&1 \
+   && [ "$(defaults read "$BOTTLER_PROJECTS/amp/A & B <1>.app/Contents/Info" CFBundleName 2>/dev/null)" = "A & B <1>" ]; then ok; \
+else bad "a title with & and < builds a valid Info.plist with that name"; fi
 # a project's own icon (projects/<name>/icon.*) replaces the one made from the exe,
 # for the app and inside the exe; changing it later re-patches the exe from its .bkp
 core/project.sh custom min "$GA" >/dev/null
